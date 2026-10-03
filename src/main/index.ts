@@ -3,6 +3,7 @@ import { join } from 'node:path'
 
 import { registerWorkspaceIpc } from './ipc/workspace-ipc'
 import { registerSessionIpc } from './ipc/session-ipc'
+import { registerSettingsIpc } from './ipc/settings-ipc'
 import { RunEventBus } from './state/run-events'
 import { SessionStore } from './state/session-store'
 
@@ -41,6 +42,7 @@ app.whenReady().then(async () => {
   const store = await SessionStore.open(join(app.getPath('userData'), 'state'))
   await store.recoverInterruptedRuns()
   registerSessionIpc(store, new RunEventBus())
+  registerSettingsIpc()
   registerWorkspaceIpc()
   createWindow()
 

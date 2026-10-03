@@ -71,6 +71,11 @@ export const runRecordSchema = z.object({
 })
 export type RunRecord = z.infer<typeof runRecordSchema>
 
+export interface ModelSettings {
+  fastModel: string
+  deepModel: string
+}
+
 export const openWorkspaceRequestSchema = z.object({ root: z.string().min(1) })
 export const listWorkspaceRequestSchema = z.object({ path: z.string().default('') })
 export const readTextRequestSchema = z.object({
@@ -108,5 +113,8 @@ export interface DesktopAPI {
     create(input: { title: string; workspaceRoot: string }): Promise<SessionRecord>
     appendMessage(sessionId: string, role: ChatMessage['role'], content: string): Promise<ChatMessage>
     onAgentEvent(listener: (event: AgentEvent) => void): () => void
+  }
+  settings: {
+    models(): Promise<ModelSettings>
   }
 }

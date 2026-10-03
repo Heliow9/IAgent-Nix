@@ -27,6 +27,9 @@ const desktop: DesktopAPI = {
       ipcRenderer.on('agent:event', handler)
       return () => ipcRenderer.removeListener('agent:event', handler)
     }
+  },
+  settings: {
+    models: () => ipcRenderer.invoke('settings:models')
   }
 }
 
