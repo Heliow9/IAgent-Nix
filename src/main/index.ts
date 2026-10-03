@@ -2,6 +2,9 @@ import { app, BrowserWindow, shell } from 'electron'
 import { join } from 'node:path'
 
 import { registerWorkspaceIpc } from './ipc/workspace-ipc'
+import { registerSessionIpc } from './ipc/session-ipc'
+import { RunEventBus } from './state/run-events'
+import { SessionStore } from './state/session-store'
 
 function createWindow(): BrowserWindow {
   const window = new BrowserWindow({
@@ -34,7 +37,10 @@ function createWindow(): BrowserWindow {
   return window
 }
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
+  const store = await SessionStore.open(join(app.getPath('userData'), 'state'))
+  await store.recoverInterruptedRuns()
+  registerSessionIpc(store, new RunEventBus())
   registerWorkspaceIpc()
   createWindow()
 

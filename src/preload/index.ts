@@ -1,6 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron'
 
-import type { DesktopAPI } from '../shared/contracts'
+import { agentEventSchema, type DesktopAPI } from '../shared/contracts'
 
 const desktop: DesktopAPI = {
   app: {
@@ -14,6 +14,19 @@ const desktop: DesktopAPI = {
     readText: (path, range = {}) => ipcRenderer.invoke('workspace:readText', { path, ...range }),
     saveText: (path, content, expectedHash) => ipcRenderer.invoke('workspace:saveText', { path, content, expectedHash }),
     search: (query, maxResults = 100) => ipcRenderer.invoke('workspace:search', { query, maxResults })
+  },
+  sessions: {
+    list: () => ipcRenderer.invoke('sessions:list'),
+    create: (input) => ipcRenderer.invoke('sessions:create', input),
+    appendMessage: (sessionId, role, content) => ipcRenderer.invoke('sessions:appendMessage', { sessionId, role, content }),
+    onAgentEvent: (listener) => {
+      const handler = (_event: Electron.IpcRendererEvent, payload: unknown): void => {
+        const parsed = agentEventSchema.safeParse(payload)
+        if (parsed.success) listener(parsed.data)
+      }
+      ipcRenderer.on('agent:event', handler)
+      return () => ipcRenderer.removeListener('agent:event', handler)
+    }
   }
 }
 

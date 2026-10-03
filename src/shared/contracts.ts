@@ -43,6 +43,34 @@ export const agentEventSchema = z.discriminatedUnion('type', [
 ])
 export type AgentEvent = z.infer<typeof agentEventSchema>
 
+export const chatMessageSchema = z.object({
+  id: z.string().min(1),
+  role: z.enum(['user', 'assistant', 'system', 'tool']),
+  content: z.string(),
+  createdAt: z.string().datetime()
+})
+export type ChatMessage = z.infer<typeof chatMessageSchema>
+
+export const sessionRecordSchema = z.object({
+  id: z.string().min(1),
+  title: z.string().min(1),
+  workspaceRoot: z.string().min(1),
+  permissionMode: permissionModeSchema,
+  messages: z.array(chatMessageSchema),
+  createdAt: z.string().datetime(),
+  updatedAt: z.string().datetime()
+})
+export type SessionRecord = z.infer<typeof sessionRecordSchema>
+
+export const runRecordSchema = z.object({
+  id: z.string().min(1),
+  sessionId: z.string().min(1),
+  status: runStatusSchema,
+  createdAt: z.string().datetime(),
+  updatedAt: z.string().datetime()
+})
+export type RunRecord = z.infer<typeof runRecordSchema>
+
 export const openWorkspaceRequestSchema = z.object({ root: z.string().min(1) })
 export const listWorkspaceRequestSchema = z.object({ path: z.string().default('') })
 export const readTextRequestSchema = z.object({
@@ -74,5 +102,11 @@ export interface DesktopAPI {
     readText(path: string, range?: { startLine?: number; endLine?: number }): Promise<{ content: string; hash: string; totalLines: number }>
     saveText(path: string, content: string, expectedHash?: string): Promise<{ hash: string }>
     search(query: string, maxResults?: number): Promise<Array<{ path: string; line: number; column: number; preview: string }>>
+  }
+  sessions: {
+    list(): Promise<SessionRecord[]>
+    create(input: { title: string; workspaceRoot: string }): Promise<SessionRecord>
+    appendMessage(sessionId: string, role: ChatMessage['role'], content: string): Promise<ChatMessage>
+    onAgentEvent(listener: (event: AgentEvent) => void): () => void
   }
 }
