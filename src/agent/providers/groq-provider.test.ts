@@ -3,6 +3,10 @@ import { describe, expect, test } from 'vitest'
 import { GroqProvider, type GroqClientLike } from './groq-provider'
 
 describe('GroqProvider', () => {
+  test('can be constructed before the user configures a Groq key', () => {
+    expect(() => new GroqProvider({ apiKey: '' })).not.toThrow()
+  })
+
   test('streams text and assembles fragmented tool calls', async () => {
     const client = fakeClient([
       { choices: [{ delta: { content: 'Hello ' } }] },
@@ -30,6 +34,32 @@ describe('GroqProvider', () => {
     await collect(provider.stream({ model: 'model-a', messages: [{ role: 'user', content: 'Stop' }] }, controller.signal))
 
     expect(receivedSignal).toBe(controller.signal)
+  })
+
+  test('maps internal assistant tool calls to the Groq message shape', async () => {
+    let receivedBody: unknown
+    const client: GroqClientLike = {
+      chat: { completions: { create: async (body) => {
+        receivedBody = body
+        return (async function * () {})()
+      } } }
+    }
+    const provider = new GroqProvider({ client })
+
+    await collect(provider.stream({
+      model: 'model-a',
+      messages: [{
+        role: 'assistant', content: '',
+        toolCalls: [{ id: 'call-1', name: 'read_file', arguments: '{"path":"a.ts"}' }]
+      }]
+    }, new AbortController().signal))
+
+    expect(receivedBody).toMatchObject({
+      messages: [{
+        role: 'assistant',
+        tool_calls: [{ id: 'call-1', type: 'function', function: { name: 'read_file', arguments: '{"path":"a.ts"}' } }]
+      }]
+    })
   })
 
   test('normalizes authentication errors without including credentials', async () => {

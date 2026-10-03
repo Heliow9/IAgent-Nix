@@ -1,11 +1,19 @@
 import { app, BrowserWindow, shell } from 'electron'
 import { join } from 'node:path'
 
-import { registerWorkspaceIpc } from './ipc/workspace-ipc'
+import { ChangeService } from '../agent/changes/change-service'
+import { GroqProvider } from '../agent/providers/groq-provider'
+import { AgentRunner } from '../agent/runtime/agent-runner'
+import { ApprovalPolicy } from '../agent/runtime/approval-policy'
+import { ToolRegistry } from '../agent/tools/tool-registry'
+import { registerWorkspaceTools } from '../agent/tools/workspace-tools'
+import { registerAgentIpc } from './ipc/agent-ipc'
 import { registerSessionIpc } from './ipc/session-ipc'
-import { registerSettingsIpc } from './ipc/settings-ipc'
+import { registerSettingsIpc, resolveModelSettings } from './ipc/settings-ipc'
+import { registerWorkspaceIpc, type WorkspaceAccess } from './ipc/workspace-ipc'
 import { RunEventBus } from './state/run-events'
 import { SessionStore } from './state/session-store'
+import { WorkspaceError } from './workspace/workspace-service'
 
 function createWindow(): BrowserWindow {
   const window = new BrowserWindow({
@@ -41,9 +49,27 @@ function createWindow(): BrowserWindow {
 app.whenReady().then(async () => {
   const store = await SessionStore.open(join(app.getPath('userData'), 'state'))
   await store.recoverInterruptedRuns()
-  registerSessionIpc(store, new RunEventBus())
+  const eventBus = new RunEventBus()
+  const workspaceAccess: WorkspaceAccess = {}
+  const requireWorkspace = () => {
+    if (!workspaceAccess.current) throw new WorkspaceError('NOT_OPEN', 'No workspace is open')
+    return workspaceAccess.current
+  }
+  const changes = new ChangeService(requireWorkspace)
+  const tools = new ToolRegistry()
+  registerWorkspaceTools(tools, requireWorkspace, changes)
+  const runner = new AgentRunner({
+    provider: new GroqProvider(),
+    tools,
+    store,
+    eventBus,
+    approvalPolicy: new ApprovalPolicy(),
+    deepModel: resolveModelSettings().deepModel
+  })
+  registerSessionIpc(store, eventBus)
   registerSettingsIpc()
-  registerWorkspaceIpc()
+  registerWorkspaceIpc(workspaceAccess)
+  registerAgentIpc(runner, changes)
   createWindow()
 
   app.on('activate', () => {

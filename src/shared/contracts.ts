@@ -76,6 +76,17 @@ export interface ModelSettings {
   deepModel: string
 }
 
+export interface FileProposal {
+  id: string
+  runId?: string
+  kind: 'write' | 'delete'
+  path: string
+  content?: string
+  baseHash?: string
+  diff: string
+  status: 'pending' | 'applied' | 'rejected'
+}
+
 export const openWorkspaceRequestSchema = z.object({ root: z.string().min(1) })
 export const listWorkspaceRequestSchema = z.object({ path: z.string().default('') })
 export const readTextRequestSchema = z.object({
@@ -116,5 +127,13 @@ export interface DesktopAPI {
   }
   settings: {
     models(): Promise<ModelSettings>
+  }
+  agent: {
+    start(input: z.input<typeof startAgentRunRequestSchema>): Promise<{ runId: string }>
+    cancel(runId: string): Promise<void>
+    resolveApproval(runId: string, approvalId: string, decision: 'approved' | 'rejected'): Promise<void>
+    listProposals(): Promise<FileProposal[]>
+    applyProposal(proposalId: string): Promise<FileProposal>
+    rejectProposal(proposalId: string): Promise<FileProposal>
   }
 }

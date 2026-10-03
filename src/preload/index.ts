@@ -30,6 +30,14 @@ const desktop: DesktopAPI = {
   },
   settings: {
     models: () => ipcRenderer.invoke('settings:models')
+  },
+  agent: {
+    start: (input) => ipcRenderer.invoke('agent:start', input),
+    cancel: (runId) => ipcRenderer.invoke('agent:cancel', { runId }),
+    resolveApproval: (runId, approvalId, decision) => ipcRenderer.invoke('agent:resolveApproval', { runId, approvalId, decision }),
+    listProposals: () => ipcRenderer.invoke('agent:listProposals'),
+    applyProposal: (proposalId) => ipcRenderer.invoke('agent:applyProposal', { proposalId }),
+    rejectProposal: (proposalId) => ipcRenderer.invoke('agent:rejectProposal', { proposalId })
   }
 }
 

@@ -40,7 +40,17 @@ export class GroqProvider implements ModelProvider {
     try {
       const chunks = await this.client.chat.completions.create({
         model: request.model,
-        messages: request.messages,
+        messages: request.messages.map((message) => ({
+          role: message.role,
+          content: message.content,
+          name: message.name,
+          tool_call_id: message.toolCallId,
+          tool_calls: message.toolCalls?.map((call) => ({
+            id: call.id,
+            type: 'function',
+            function: { name: call.name, arguments: call.arguments }
+          }))
+        })),
         tools: request.tools,
         temperature: request.temperature,
         response_format: request.responseFormat ? { type: request.responseFormat } : undefined,

@@ -12,17 +12,20 @@ import { WorkspaceError, WorkspaceService } from '../workspace/workspace-service
 const createFolderRequestSchema = z.object({ path: z.string().min(1) })
 const searchRequestSchema = z.object({ query: z.string().min(1), maxResults: z.number().int().positive().max(500).default(100) })
 
-export function registerWorkspaceIpc(): void {
-  let workspace: WorkspaceService | undefined
+export interface WorkspaceAccess {
+  current?: WorkspaceService
+}
+
+export function registerWorkspaceIpc(access: WorkspaceAccess = {}): void {
   const current = (): WorkspaceService => {
-    if (!workspace) throw new WorkspaceError('NOT_OPEN', 'No workspace is open')
-    return workspace
+    if (!access.current) throw new WorkspaceError('NOT_OPEN', 'No workspace is open')
+    return access.current
   }
 
   ipcMain.handle('workspace:open', async (_event, payload) => {
     const input = openWorkspaceRequestSchema.parse(payload)
-    workspace = await WorkspaceService.open(input.root)
-    return { root: workspace.root }
+    access.current = await WorkspaceService.open(input.root)
+    return { root: access.current.root }
   })
   ipcMain.handle('workspace:list', (_event, payload) => current().list(listWorkspaceRequestSchema.parse(payload).path))
   ipcMain.handle('workspace:readText', (_event, payload) => {

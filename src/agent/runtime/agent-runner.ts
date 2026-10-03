@@ -1,0 +1,200 @@
+import { randomUUID } from 'node:crypto'
+
+import type { RunEventBus } from '../../main/state/run-events'
+import type { SessionStore } from '../../main/state/session-store'
+import type { AgentEvent, PermissionMode } from '../../shared/contracts'
+import type { ModelMessage, ModelProvider } from '../providers/model-provider'
+import { ToolRegistry, ToolRegistryError } from '../tools/tool-registry'
+import type { ApprovalPolicy } from './approval-policy'
+
+interface AgentRunnerDependencies {
+  provider: ModelProvider
+  tools: ToolRegistry
+  store: SessionStore
+  eventBus: RunEventBus
+  approvalPolicy: ApprovalPolicy
+  deepModel: string
+}
+
+interface StartInput {
+  sessionId: string
+  prompt: string
+  permissionMode: PermissionMode
+}
+
+type ApprovalDecision = 'approved' | 'rejected'
+
+interface ActiveRun {
+  controller: AbortController
+  pendingApproval?: { id: string; resolve: (decision: ApprovalDecision) => void }
+}
+
+export class AgentRunner {
+  private readonly active = new Map<string, ActiveRun>()
+
+  constructor(private readonly dependencies: AgentRunnerDependencies) {}
+
+  start(input: StartInput): { runId: string } {
+    const runId = randomUUID()
+    const active: ActiveRun = { controller: new AbortController() }
+    this.active.set(runId, active)
+    void this.execute(runId, input, active).catch(() => undefined)
+    return { runId }
+  }
+
+  resolveApproval(runId: string, approvalId: string, decision: ApprovalDecision): void {
+    const pending = this.active.get(runId)?.pendingApproval
+    if (!pending || pending.id !== approvalId) throw new Error('Approval is not pending for this run')
+    pending.resolve(decision)
+  }
+
+  cancel(runId: string): void {
+    const active = this.active.get(runId)
+    if (!active) return
+    active.controller.abort()
+    active.pendingApproval?.resolve('rejected')
+  }
+
+  private async execute(runId: string, input: StartInput, active: ActiveRun): Promise<void> {
+    const { store, provider, tools, approvalPolicy, deepModel } = this.dependencies
+    const messages: ModelMessage[] = [
+      { role: 'system', content: 'You are a coding agent. Inspect the workspace with tools, make bounded proposals, run checks, and report the result.' },
+      { role: 'user', content: input.prompt }
+    ]
+    try {
+      await store.appendMessage(input.sessionId, { role: 'user', content: input.prompt })
+      await store.createRun({ id: runId, sessionId: input.sessionId, status: 'queued' })
+      await store.setRunStatus(runId, 'running')
+      await this.publish({ type: 'run.started', runId, timestamp: now() })
+
+      for (let iteration = 0; iteration < 20; iteration += 1) {
+        let assistantText = ''
+        const toolCalls: Array<{ id: string; name: string; arguments: string }> = []
+        for await (const event of provider.stream({
+          model: deepModel,
+          messages,
+          tools: tools.definitionsForPhase('workspace')
+        }, active.controller.signal)) {
+          if (event.type === 'text-delta') {
+            assistantText += event.delta
+            await this.publish({ type: 'assistant.delta', runId, timestamp: now(), delta: event.delta })
+          } else if (event.type === 'tool-call') toolCalls.push(event)
+        }
+
+        if (toolCalls.length === 0) {
+          await store.appendMessage(input.sessionId, { role: 'assistant', content: assistantText })
+          await this.publish({ type: 'assistant.completed', runId, timestamp: now(), content: assistantText })
+          await store.setRunStatus(runId, 'completed')
+          await this.publish({ type: 'run.completed', runId, timestamp: now() })
+          return
+        }
+
+        messages.push({ role: 'assistant', content: assistantText, toolCalls })
+        for (const call of toolCalls) {
+          await this.publish({ type: 'tool.requested', runId, timestamp: now(), toolCallId: call.id, name: call.name, arguments: call.arguments })
+          let parsed: unknown
+          try {
+            parsed = tools.parse(call.name, call.arguments)
+          } catch (error) {
+            const result = toolError(error)
+            messages.push(toolMessage(call, result))
+            await this.publish({ type: 'tool.completed', runId, timestamp: now(), toolCallId: call.id, name: call.name, result })
+            continue
+          }
+
+          const policy = approvalPolicy.evaluate(call.name, parsed, input.permissionMode, tools.effect(call.name))
+          if (policy.required) {
+            const approvalId = randomUUID()
+            await store.setRunStatus(runId, 'waiting_approval')
+            await this.publish({
+              type: 'approval.requested', runId, timestamp: now(), approvalId,
+              summary: policy.reason ?? `${call.name} requires approval`
+            })
+            const decision = await this.waitForApproval(active, approvalId)
+            active.pendingApproval = undefined
+            await this.publish({ type: 'approval.resolved', runId, timestamp: now(), approvalId, decision })
+            if (active.controller.signal.aborted) throw abortError()
+            await store.setRunStatus(runId, 'running')
+            if (decision === 'rejected') {
+              const result = { ok: false, error: { code: 'USER_REJECTED', message: 'The user rejected this tool call' } }
+              messages.push(toolMessage(call, result))
+              await this.publish({ type: 'tool.completed', runId, timestamp: now(), toolCallId: call.id, name: call.name, result })
+              continue
+            }
+          }
+
+          await this.publish({ type: 'tool.started', runId, timestamp: now(), toolCallId: call.id, name: call.name })
+          try {
+            const value = await tools.execute(call.name, parsed, { runId, signal: active.controller.signal })
+            const result = { ok: true, value }
+            messages.push(toolMessage(call, result))
+            if (isProposal(value)) await this.publish({
+              type: 'file.proposed', runId, timestamp: now(), proposalId: value.id, path: value.path, diff: value.diff
+            })
+            await this.publish({ type: 'tool.completed', runId, timestamp: now(), toolCallId: call.id, name: call.name, result })
+          } catch (error) {
+            if (active.controller.signal.aborted) throw abortError()
+            const result = toolError(error)
+            messages.push(toolMessage(call, result))
+            await this.publish({ type: 'tool.completed', runId, timestamp: now(), toolCallId: call.id, name: call.name, result })
+          }
+        }
+      }
+      throw new Error('Agent stopped after reaching the 20 iteration limit')
+    } catch (error) {
+      if (active.controller.signal.aborted || (error instanceof Error && error.name === 'AbortError')) {
+        if (store.getRun(runId)) {
+          await store.setRunStatus(runId, 'cancelled')
+          await this.publish({ type: 'run.cancelled', runId, timestamp: now() })
+        }
+      } else if (store.getRun(runId)) {
+        await store.setRunStatus(runId, 'failed')
+        await this.publish({ type: 'run.failed', runId, timestamp: now(), message: safeErrorMessage(error) })
+      }
+    } finally {
+      this.active.delete(runId)
+    }
+
+    function toolMessage(call: { id: string; name: string }, result: unknown): ModelMessage {
+      return { role: 'tool', toolCallId: call.id, name: call.name, content: JSON.stringify(result) }
+    }
+  }
+
+  private waitForApproval(active: ActiveRun, approvalId: string): Promise<ApprovalDecision> {
+    return new Promise((resolve) => {
+      const settle = (decision: ApprovalDecision): void => {
+        active.controller.signal.removeEventListener('abort', onAbort)
+        resolve(decision)
+      }
+      const onAbort = (): void => settle('rejected')
+      active.pendingApproval = { id: approvalId, resolve: settle }
+      active.controller.signal.addEventListener('abort', onAbort, { once: true })
+    })
+  }
+
+  private async publish(event: AgentEvent): Promise<void> {
+    await this.dependencies.store.appendEvent(event.runId, event)
+    this.dependencies.eventBus.publish(event)
+  }
+}
+
+function now(): string { return new Date().toISOString() }
+
+function toolError(error: unknown): { ok: false; error: { code: string; message: string } } {
+  if (error instanceof ToolRegistryError) return { ok: false, error: { code: error.code, message: error.message } }
+  return { ok: false, error: { code: 'TOOL_ERROR', message: safeErrorMessage(error) } }
+}
+
+function safeErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message.replace(/(?:sk|gsk)_[A-Za-z0-9_-]+/g, '[REDACTED]') : 'Unknown agent error'
+}
+
+function abortError(): Error {
+  const error = new Error('Aborted')
+  error.name = 'AbortError'
+  return error
+}
+
+function isProposal(value: unknown): value is { id: string; path: string; diff: string } {
+  return Boolean(value && typeof value === 'object' && 'id' in value && 'path' in value && 'diff' in value)
+}
