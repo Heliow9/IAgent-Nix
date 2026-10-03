@@ -52,4 +52,49 @@ describe('ChangeService', () => {
     await service.reject(proposal.id)
     await expect(service.apply(proposal.id)).rejects.toThrow('Proposal is not pending')
   })
+
+  test('reloads and updates proposals through durable persistence', async () => {
+    const saved = new Map<string, any>()
+    const persistence = {
+      listProposals: () => [...saved.values()],
+      upsertProposal: async (proposal: any) => { saved.set(proposal.id, structuredClone(proposal)) }
+    }
+    const first = new ChangeService(() => workspace, undefined, persistence)
+    const proposal = await first.propose({ kind: 'write', path: 'src/app.ts', content: 'persisted\n', runId: 'run-1' })
+
+    const second = new ChangeService(() => workspace, undefined, persistence)
+    expect(second.list()).toEqual([expect.objectContaining({ id: proposal.id, status: 'pending' })])
+    await second.apply(proposal.id)
+
+    expect(saved.get(proposal.id).status).toBe('applied')
+  })
+
+  test('creates a localized patch while preserving all unrelated content', async () => {
+    const service = new ChangeService(() => workspace)
+    const proposal = await service.proposePatch({
+      path: 'src/app.ts',
+      edits: [{ search: 'export const value = 1', replace: 'export const value = 2' }]
+    })
+
+    expect(proposal.content).toBe('export const value = 2\n')
+    expect(proposal.diff).toContain('-export const value = 1')
+    expect(proposal.diff).toContain('+export const value = 2')
+  })
+
+  test('rejects ambiguous localized edits and patch protocol markers in file content', async () => {
+    const service = new ChangeService(() => workspace)
+    await expect(service.proposePatch({ path: 'src/app.ts', edits: [{ search: 'missing text', replace: 'new' }] }))
+      .rejects.toMatchObject({ code: 'PATCH_SEARCH_NOT_FOUND' })
+    await expect(service.propose({ kind: 'write', path: 'src/app.ts', content: '+*** End Patch\n' }))
+      .rejects.toMatchObject({ code: 'INVALID_GENERATED_CONTENT' })
+  })
+
+  test('rejects an unexpectedly truncated replacement of an existing source file', async () => {
+    const original = Array.from({ length: 30 }, (_, index) => `export const value${index} = ${index}`).join('\n')
+    await workspace.writeTextAtomic('src/large.ts', `${original}\n`)
+    const service = new ChangeService(() => workspace)
+
+    await expect(service.propose({ kind: 'write', path: 'src/large.ts', content: 'export const birthDate = true\n' }))
+      .rejects.toMatchObject({ code: 'UNEXPECTED_LARGE_DELETION' })
+  })
 })

@@ -201,6 +201,41 @@ describe('AgentRunner', () => {
     expect(store.getRun(runId)?.status).toBe('cancelled')
   })
 
+  test('resumes a failed run from its last safe checkpoint without duplicating the user message', async () => {
+    let calls = 0
+    const provider: ModelProvider = {
+      async * stream(): AsyncIterable<ModelEvent> {
+        calls += 1
+        if (calls === 1) throw new Error('temporary provider failure')
+        yield { type: 'text-delta', delta: 'Recovered answer' }
+        yield { type: 'completed' }
+      }
+    }
+    const { runner, bus } = createRunner(provider)
+
+    const { runId } = runner.start({ sessionId, prompt: 'Continue me', permissionMode: 'ask' })
+    const failed = await waitForEvent(bus, runId, 'run.failed')
+    expect(failed.resumable).toBe(true)
+
+    expect(runner.resume(runId)).toEqual({ runId })
+    await waitForEvent(bus, runId, 'run.resumed')
+    await waitForEvent(bus, runId, 'run.completed')
+
+    expect(store.listSessions()[0].messages.map((message) => message.content)).toEqual(['Continue me', 'Recovered answer'])
+    expect(store.getCheckpoint(runId)).toBeUndefined()
+  })
+
+  test('refuses to resume from a checkpoint captured during an unsafe effect', async () => {
+    const { runner } = createRunner(sequenceProvider([]))
+    await store.createRun({ id: 'unsafe-run', sessionId, status: 'failed' })
+    await store.saveCheckpoint('unsafe-run', {
+      sessionId, prompt: 'Unsafe', permissionMode: 'ask', model: 'deep-model',
+      messages: [{ role: 'user', content: 'Unsafe' }], safeToResume: false
+    })
+
+    expect(() => runner.resume('unsafe-run')).toThrow(/safe checkpoint/i)
+  })
+
   function createRunner(provider: ModelProvider, tools = new ToolRegistry(), extra: Record<string, unknown> = {}): { runner: AgentRunner; bus: RunEventBus } {
     const bus = new RunEventBus()
     return {

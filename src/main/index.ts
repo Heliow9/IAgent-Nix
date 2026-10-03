@@ -62,7 +62,7 @@ app.whenReady().then(async () => {
     if (!workspaceAccess.current) throw new WorkspaceError('NOT_OPEN', 'No workspace is open')
     return workspaceAccess.current
   }
-  const changes = new ChangeService(requireWorkspace)
+  const changes = new ChangeService(requireWorkspace, undefined, store)
   const tools = new ToolRegistry()
   registerWorkspaceTools(tools, requireWorkspace, changes)
   const provider = new GroqProvider()

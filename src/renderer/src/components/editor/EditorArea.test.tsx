@@ -91,10 +91,10 @@ function desktop(workspace: Partial<DesktopAPI['workspace']> = {}): DesktopAPI {
       readText: async () => ({ content: 'export const value = 1\n', hash: 'hash-1', totalLines: 2 }),
       saveText: async () => ({ hash: 'hash-2' }), search: async () => [], ...workspace
     },
-    sessions: { list: async () => [], create: async () => { throw new Error('unused') }, appendMessage: async () => { throw new Error('unused') }, onAgentEvent: () => () => undefined },
+    sessions: { list: async () => [], create: async () => { throw new Error('unused') }, appendMessage: async () => { throw new Error('unused') }, listRuns: async () => [], events: async () => [], onAgentEvent: () => () => undefined },
     settings: { models: async () => ({ fastModel: 'fast', deepModel: 'deep' }) },
     projects: { preview: async () => { throw new Error('unused') }, create: async () => { throw new Error('unused') } },
-    agent: { start: async () => ({ runId: 'run' }), cancel: async () => undefined, resolveApproval: async () => undefined, listProposals: async () => [], applyProposal: async () => { throw new Error('unused') }, rejectProposal: async () => { throw new Error('unused') } },
+    agent: { start: async () => ({ runId: 'run' }), resume: async (runId) => ({ runId }), cancel: async () => undefined, resolveApproval: async () => undefined, listProposals: async () => [], applyProposal: async () => { throw new Error('unused') }, rejectProposal: async () => { throw new Error('unused') } },
     terminal: { create: async () => ({ id: 'terminal' }), write: async () => undefined, resize: async () => undefined, dispose: async () => undefined, onData: () => () => undefined, onExit: () => () => undefined }
   }
 }

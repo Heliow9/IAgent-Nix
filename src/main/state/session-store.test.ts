@@ -67,6 +67,52 @@ describe('SessionStore', () => {
     ])
     expect(store.getEvents('run-waiting')[1]).toMatchObject({ decision: 'rejected' })
   })
+
+  test('persists a safe agent checkpoint and exposes a resumable failed run after restart', async () => {
+    const first = await SessionStore.open(directory)
+    const session = await first.createSession({ title: 'Resume', workspaceRoot: 'C:/work' })
+    await first.createRun({ id: 'run-resume', sessionId: session.id, status: 'running' })
+    await first.saveCheckpoint('run-resume', {
+      sessionId: session.id,
+      prompt: 'Continue the implementation',
+      permissionMode: 'ask',
+      model: 'deep-model',
+      messages: [{ role: 'system', content: 'System' }, { role: 'user', content: 'Continue the implementation' }],
+      safeToResume: true
+    })
+
+    const second = await SessionStore.open(directory)
+    await second.recoverInterruptedRuns()
+
+    expect(second.getCheckpoint('run-resume')).toMatchObject({ prompt: 'Continue the implementation', safeToResume: true })
+    expect(second.listRuns(session.id)).toEqual([expect.objectContaining({ id: 'run-resume', status: 'failed', resumable: true })])
+    expect(second.getEvents('run-resume').at(-1)).toMatchObject({ type: 'run.failed', resumable: true })
+  })
+
+  test('does not advertise an unsafe checkpoint as resumable', async () => {
+    const store = await SessionStore.open(directory)
+    const session = await store.createSession({ title: 'Unsafe', workspaceRoot: 'C:/work' })
+    await store.createRun({ id: 'run-unsafe', sessionId: session.id, status: 'running' })
+    await store.saveCheckpoint('run-unsafe', {
+      sessionId: session.id, prompt: 'Run command', permissionMode: 'ask', model: 'deep-model',
+      messages: [{ role: 'user', content: 'Run command' }], safeToResume: false
+    })
+
+    await store.recoverInterruptedRuns()
+
+    expect(store.listRuns(session.id)[0]).toMatchObject({ status: 'failed', resumable: false })
+  })
+
+  test('persists file proposals so they can be applied after restart', async () => {
+    const first = await SessionStore.open(directory)
+    await first.upsertProposal({ id: 'proposal-1', runId: 'run-1', kind: 'write', path: 'src/app.ts', content: 'new', diff: '+new', status: 'pending' })
+
+    const second = await SessionStore.open(directory)
+    expect(second.listProposals()).toEqual([expect.objectContaining({ id: 'proposal-1', status: 'pending' })])
+    await second.upsertProposal({ ...second.listProposals()[0], status: 'applied' })
+
+    expect((await SessionStore.open(directory)).listProposals()[0].status).toBe('applied')
+  })
 })
 
 describe('RunEventBus', () => {

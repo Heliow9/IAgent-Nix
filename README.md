@@ -53,6 +53,10 @@ Execute `npm run build` antes do E2E. O smoke da Groq consome uma requisicao peq
 4. Revise propostas no diff e use **Aplicar** ou **Rejeitar**.
 5. Use o terminal integrado para instalar dependencias, testar e executar o projeto.
 
+As conversas, atividades e propostas ficam salvas e reaparecem quando o mesmo workspace e aberto novamente. Se a Groq falhar, atingir um limite temporario ou a execucao chegar ao limite de iteracoes em um ponto seguro, use **Continuar de onde parou**: o agente retoma o contexto salvo sem duplicar a solicitacao original. Execucoes interrompidas no meio de uma ferramenta ou aprovacao nao sao retomadas automaticamente, evitando repetir efeitos colaterais.
+
+Ao editar arquivos existentes, o agente recebe uma ferramenta de substituicao localizada por trechos exatos. Ela preserva o restante do arquivo e rejeita buscas ausentes ou ambiguas. Substituicoes completas que incluam marcadores de patch ou removam uma parte anormalmente grande de um arquivo existente tambem sao bloqueadas antes de gerar uma proposta.
+
 Arquivos sensiveis como `.env`, chaves privadas e certificados nao podem ser lidos pelas ferramentas do workspace. Operacoes de arquivo validam os caminhos contra escapes e links simbolicos. Comandos e mudancas destrutivas continuam sujeitos a aprovacao.
 
 ## Arquitetura

@@ -2,13 +2,25 @@ import { randomUUID } from 'node:crypto'
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 
-import type { AgentEvent, ChatMessage, RunRecord, RunStatus, SessionRecord } from '../../shared/contracts'
+import type { AgentEvent, ChatMessage, FileProposal, PermissionMode, RunRecord, RunStatus, RunSummary, SessionRecord } from '../../shared/contracts'
+import type { ModelMessage } from '../../agent/providers/model-provider'
+
+export interface RunCheckpoint {
+  sessionId: string
+  prompt: string
+  permissionMode: PermissionMode
+  model: string
+  messages: ModelMessage[]
+  safeToResume: boolean
+}
 
 interface PersistedState {
   version: 1
   sessions: SessionRecord[]
   runs: RunRecord[]
   events: Record<string, AgentEvent[]>
+  checkpoints: Record<string, RunCheckpoint>
+  proposals: FileProposal[]
 }
 
 export class SessionStore {
@@ -29,7 +41,7 @@ export class SessionStore {
     try {
       const parsed: unknown = JSON.parse(await readFile(filePath, 'utf8'))
       if (!isPersistedState(parsed)) throw new Error('Unsupported session store shape')
-      state = parsed
+      state = normalizeState(parsed)
     } catch (error) {
       if (isMissingFile(error)) needsInitialWrite = true
       else {
@@ -83,6 +95,38 @@ export class SessionStore {
     return run ? structuredClone(run) : undefined
   }
 
+  listRuns(sessionId: string): RunSummary[] {
+    return this.state.runs
+      .filter((run) => run.sessionId === sessionId)
+      .map((run) => ({ ...structuredClone(run), resumable: Boolean(this.state.checkpoints[run.id]?.safeToResume) }))
+      .sort((left, right) => left.createdAt.localeCompare(right.createdAt))
+  }
+
+  async saveCheckpoint(runId: string, checkpoint: RunCheckpoint): Promise<void> {
+    this.requireRun(runId)
+    this.state.checkpoints[runId] = structuredClone(checkpoint)
+    await this.persist()
+  }
+
+  getCheckpoint(runId: string): RunCheckpoint | undefined {
+    const checkpoint = this.state.checkpoints[runId]
+    return checkpoint ? structuredClone(checkpoint) : undefined
+  }
+
+  async clearCheckpoint(runId: string): Promise<void> {
+    delete this.state.checkpoints[runId]
+    await this.persist()
+  }
+
+  listProposals(): FileProposal[] { return structuredClone(this.state.proposals) }
+
+  async upsertProposal(proposal: FileProposal): Promise<void> {
+    const index = this.state.proposals.findIndex((item) => item.id === proposal.id)
+    if (index >= 0) this.state.proposals[index] = structuredClone(proposal)
+    else this.state.proposals.push(structuredClone(proposal))
+    await this.persist()
+  }
+
   async setRunStatus(runId: string, status: RunStatus): Promise<void> {
     const run = this.requireRun(runId)
     run.status = status
@@ -116,7 +160,11 @@ export class SessionStore {
           approvalId: request.approvalId, decision: 'rejected'
         })
       }
-      events.push({ type: 'run.failed', runId: run.id, timestamp: now, message: 'Application closed before the run completed' })
+      events.push({
+        type: 'run.failed', runId: run.id, timestamp: now,
+        message: 'Application closed before the run completed',
+        resumable: Boolean(this.state.checkpoints[run.id]?.safeToResume)
+      })
       this.state.events[run.id] = events
       run.status = 'failed'
       run.updatedAt = now
@@ -153,13 +201,24 @@ export class SessionStore {
 }
 
 function emptyState(): PersistedState {
-  return { version: 1, sessions: [], runs: [], events: {} }
+  return { version: 1, sessions: [], runs: [], events: {}, checkpoints: {}, proposals: [] }
 }
 
 function isPersistedState(value: unknown): value is PersistedState {
   if (!value || typeof value !== 'object') return false
   const state = value as Partial<PersistedState>
   return state.version === 1 && Array.isArray(state.sessions) && Array.isArray(state.runs) && Boolean(state.events) && typeof state.events === 'object'
+}
+
+function normalizeState(value: PersistedState): PersistedState {
+  return {
+    version: 1,
+    sessions: value.sessions,
+    runs: value.runs,
+    events: value.events,
+    checkpoints: value.checkpoints && typeof value.checkpoints === 'object' ? value.checkpoints : {},
+    proposals: Array.isArray(value.proposals) ? value.proposals : []
+  }
 }
 
 function isMissingFile(error: unknown): boolean {

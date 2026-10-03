@@ -10,6 +10,8 @@ const appendMessageSchema = z.object({
   role: z.enum(['user', 'assistant', 'system', 'tool']),
   content: z.string()
 })
+const sessionIdSchema = z.object({ sessionId: z.string().min(1) })
+const runIdSchema = z.object({ runId: z.string().min(1) })
 
 export function registerSessionIpc(store: SessionStore, eventBus: RunEventBus): () => void {
   ipcMain.handle('sessions:list', () => store.listSessions())
@@ -18,7 +20,11 @@ export function registerSessionIpc(store: SessionStore, eventBus: RunEventBus): 
     const input = appendMessageSchema.parse(payload)
     return store.appendMessage(input.sessionId, input)
   })
+  ipcMain.handle('sessions:listRuns', (_event, payload) => store.listRuns(sessionIdSchema.parse(payload).sessionId))
+  ipcMain.handle('sessions:events', (_event, payload) => store.getEvents(runIdSchema.parse(payload).runId))
   return eventBus.subscribe((event) => {
-    for (const window of BrowserWindow.getAllWindows()) window.webContents.send('agent:event', event)
+    for (const window of BrowserWindow.getAllWindows()) {
+      if (!window.isDestroyed() && !window.webContents.isDestroyed()) window.webContents.send('agent:event', event)
+    }
   })
 }

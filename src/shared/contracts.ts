@@ -28,6 +28,7 @@ const eventBase = {
 
 export const agentEventSchema = z.discriminatedUnion('type', [
   z.object({ ...eventBase, type: z.literal('run.started') }),
+  z.object({ ...eventBase, type: z.literal('run.resumed') }),
   z.object({ ...eventBase, type: z.literal('assistant.delta'), delta: z.string() }),
   z.object({ ...eventBase, type: z.literal('assistant.completed'), content: z.string() }),
   z.object({ ...eventBase, type: z.literal('tool.requested'), toolCallId: z.string(), name: z.string(), arguments: z.unknown() }),
@@ -37,7 +38,7 @@ export const agentEventSchema = z.discriminatedUnion('type', [
   z.object({ ...eventBase, type: z.literal('approval.resolved'), approvalId: z.string(), decision: z.enum(['approved', 'rejected']) }),
   z.object({ ...eventBase, type: z.literal('file.proposed'), proposalId: z.string(), path: z.string(), diff: z.string() }),
   z.object({ ...eventBase, type: z.literal('file.applied'), proposalId: z.string(), path: z.string() }),
-  z.object({ ...eventBase, type: z.literal('run.failed'), message: z.string() }),
+  z.object({ ...eventBase, type: z.literal('run.failed'), message: z.string(), resumable: z.boolean().default(false) }),
   z.object({ ...eventBase, type: z.literal('run.cancelled') }),
   z.object({ ...eventBase, type: z.literal('run.completed') })
 ])
@@ -102,6 +103,10 @@ export interface FileProposal {
   status: 'pending' | 'applied' | 'rejected'
 }
 
+export interface RunSummary extends RunRecord {
+  resumable: boolean
+}
+
 export const openWorkspaceRequestSchema = z.object({ root: z.string().min(1) })
 export const listWorkspaceRequestSchema = z.object({ path: z.string().default('') })
 export const readTextRequestSchema = z.object({
@@ -138,6 +143,8 @@ export interface DesktopAPI {
     list(): Promise<SessionRecord[]>
     create(input: { title: string; workspaceRoot: string }): Promise<SessionRecord>
     appendMessage(sessionId: string, role: ChatMessage['role'], content: string): Promise<ChatMessage>
+    listRuns(sessionId: string): Promise<RunSummary[]>
+    events(runId: string): Promise<AgentEvent[]>
     onAgentEvent(listener: (event: AgentEvent) => void): () => void
   }
   settings: {
@@ -149,6 +156,7 @@ export interface DesktopAPI {
   }
   agent: {
     start(input: z.input<typeof startAgentRunRequestSchema>): Promise<{ runId: string }>
+    resume(runId: string): Promise<{ runId: string }>
     cancel(runId: string): Promise<void>
     resolveApproval(runId: string, approvalId: string, decision: 'approved' | 'rejected'): Promise<void>
     listProposals(): Promise<FileProposal[]>

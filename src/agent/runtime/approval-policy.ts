@@ -12,7 +12,7 @@ export class ApprovalPolicy {
     if (effect === 'read' || READ_TOOLS.has(toolName)) return { required: false }
     if (toolName === 'propose_file_delete') return { required: true, reason: 'File deletion always requires approval' }
     if (toolName === 'run_command') return this.commandDecision(args, mode)
-    if (mode === 'auto-workspace' && (toolName === 'propose_file_change' || toolName === 'create_architecture_document')) {
+    if (mode === 'auto-workspace' && (toolName === 'propose_file_change' || toolName === 'propose_file_patch' || toolName === 'create_architecture_document')) {
       return { required: false }
     }
     return { required: true, reason: 'This action changes the workspace' }

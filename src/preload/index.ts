@@ -19,6 +19,8 @@ const desktop: DesktopAPI = {
     list: () => ipcRenderer.invoke('sessions:list'),
     create: (input) => ipcRenderer.invoke('sessions:create', input),
     appendMessage: (sessionId, role, content) => ipcRenderer.invoke('sessions:appendMessage', { sessionId, role, content }),
+    listRuns: (sessionId) => ipcRenderer.invoke('sessions:listRuns', { sessionId }),
+    events: (runId) => ipcRenderer.invoke('sessions:events', { runId }),
     onAgentEvent: (listener) => {
       const handler = (_event: Electron.IpcRendererEvent, payload: unknown): void => {
         const parsed = agentEventSchema.safeParse(payload)
@@ -37,6 +39,7 @@ const desktop: DesktopAPI = {
   },
   agent: {
     start: (input) => ipcRenderer.invoke('agent:start', input),
+    resume: (runId) => ipcRenderer.invoke('agent:resume', { runId }),
     cancel: (runId) => ipcRenderer.invoke('agent:cancel', { runId }),
     resolveApproval: (runId, approvalId, decision) => ipcRenderer.invoke('agent:resolveApproval', { runId, approvalId, decision }),
     listProposals: () => ipcRenderer.invoke('agent:listProposals'),

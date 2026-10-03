@@ -17,10 +17,24 @@ export interface ChangeProposal {
   status: ProposalStatus
 }
 
+export interface ProposalPersistence {
+  listProposals(): ChangeProposal[]
+  upsertProposal(proposal: ChangeProposal): Promise<void>
+}
+
 export class ChangeConflictError extends Error {
   constructor(message = 'File changed after the proposal was created') {
     super(message)
     this.name = 'ChangeConflictError'
+  }
+}
+
+export type ChangeValidationCode = 'PATCH_SEARCH_NOT_FOUND' | 'PATCH_SEARCH_AMBIGUOUS' | 'INVALID_GENERATED_CONTENT' | 'UNEXPECTED_LARGE_DELETION'
+
+export class ChangeValidationError extends Error {
+  constructor(public readonly code: ChangeValidationCode, message: string) {
+    super(message)
+    this.name = 'ChangeValidationError'
   }
 }
 
@@ -29,13 +43,17 @@ export class ChangeService {
 
   constructor(
     private readonly getWorkspace: () => WorkspaceService,
-    private readonly eventBus?: RunEventBus
-  ) {}
+    private readonly eventBus?: RunEventBus,
+    private readonly persistence?: ProposalPersistence
+  ) {
+    for (const proposal of persistence?.listProposals() ?? []) this.proposals.set(proposal.id, structuredClone(proposal))
+  }
 
   async propose(input: { kind: ChangeKind; path: string; content?: string; runId?: string }): Promise<ChangeProposal> {
     const workspace = this.getWorkspace()
     const current = await readIfPresent(workspace, input.path)
     if (input.kind === 'delete' && !current) throw new Error('Cannot delete a missing file')
+    if (input.kind === 'write') validateGeneratedContent(current?.content, input.content ?? '')
     const proposal: ChangeProposal = {
       id: randomUUID(), runId: input.runId, kind: input.kind, path: input.path,
       content: input.content, baseHash: current?.hash,
@@ -43,11 +61,26 @@ export class ChangeService {
       status: 'pending'
     }
     this.proposals.set(proposal.id, proposal)
+    await this.persistence?.upsertProposal(proposal)
     if (proposal.runId) this.eventBus?.publish({
       type: 'file.proposed', runId: proposal.runId, timestamp: new Date().toISOString(),
       proposalId: proposal.id, path: proposal.path, diff: proposal.diff
     })
     return structuredClone(proposal)
+  }
+
+  async proposePatch(input: { path: string; edits: Array<{ search: string; replace: string }>; runId?: string }): Promise<ChangeProposal> {
+    const current = await this.getWorkspace().readText(input.path)
+    let content = current.content
+    for (const edit of input.edits) {
+      const first = content.indexOf(edit.search)
+      if (first < 0) throw new ChangeValidationError('PATCH_SEARCH_NOT_FOUND', 'The exact search text was not found. Read the current file and retry with an exact excerpt.')
+      if (content.indexOf(edit.search, first + edit.search.length) >= 0) {
+        throw new ChangeValidationError('PATCH_SEARCH_AMBIGUOUS', 'The search text appears more than once. Include more surrounding context so the edit is unique.')
+      }
+      content = `${content.slice(0, first)}${edit.replace}${content.slice(first + edit.search.length)}`
+    }
+    return this.propose({ kind: 'write', path: input.path, content, runId: input.runId })
   }
 
   list(): ChangeProposal[] {
@@ -76,6 +109,7 @@ export class ChangeService {
       throw error
     }
     proposal.status = 'applied'
+    await this.persistence?.upsertProposal(proposal)
     if (proposal.runId) this.eventBus?.publish({
       type: 'file.applied', runId: proposal.runId, timestamp: new Date().toISOString(),
       proposalId: proposal.id, path: proposal.path
@@ -86,6 +120,7 @@ export class ChangeService {
   async reject(proposalId: string): Promise<ChangeProposal> {
     const proposal = this.requirePending(proposalId)
     proposal.status = 'rejected'
+    await this.persistence?.upsertProposal(proposal)
     return structuredClone(proposal)
   }
 
@@ -110,4 +145,19 @@ function createDiff(path: string, before: string, after: string): string {
   const removed = before.split(/\r?\n/).filter((line, index, lines) => line || index < lines.length - 1).map((line) => `-${line}`)
   const added = after.split(/\r?\n/).filter((line, index, lines) => line || index < lines.length - 1).map((line) => `+${line}`)
   return [`--- a/${path}`, `+++ b/${path}`, '@@', ...removed, ...added].join('\n')
+}
+
+function validateGeneratedContent(before: string | undefined, after: string): void {
+  if (/(?:^|\n)\s*\+?\*\*\*\s+(?:Begin|End) Patch\b/.test(after)) {
+    throw new ChangeValidationError('INVALID_GENERATED_CONTENT', 'File content contains patch protocol markers. Send plain file content or use propose_file_patch.')
+  }
+  if (!before) return
+  const beforeLines = before.split(/\r?\n/).filter(Boolean).length
+  const afterLines = after.split(/\r?\n/).filter(Boolean).length
+  if (beforeLines >= 20 && afterLines < Math.ceil(beforeLines * 0.6)) {
+    throw new ChangeValidationError(
+      'UNEXPECTED_LARGE_DELETION',
+      `Replacement would remove more than 40% of an existing ${beforeLines}-line file. Use propose_file_patch to preserve unrelated code.`
+    )
+  }
 }

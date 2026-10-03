@@ -14,6 +14,7 @@ const proposalSchema = z.object({ proposalId: z.string().min(1) })
 
 export function registerAgentIpc(runner: AgentRunner, changes: ChangeService): void {
   ipcMain.handle('agent:start', (_event, payload) => runner.start(startAgentRunRequestSchema.parse(payload)))
+  ipcMain.handle('agent:resume', (_event, payload) => runner.resume(runIdSchema.parse(payload).runId))
   ipcMain.handle('agent:cancel', (_event, payload) => { runner.cancel(runIdSchema.parse(payload).runId) })
   ipcMain.handle('agent:resolveApproval', (_event, payload) => {
     const input = approvalSchema.parse(payload)

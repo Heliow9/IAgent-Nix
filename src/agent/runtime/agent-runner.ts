@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 
 import type { RunEventBus } from '../../main/state/run-events'
-import type { SessionStore } from '../../main/state/session-store'
+import type { RunCheckpoint, SessionStore } from '../../main/state/session-store'
 import type { AgentEvent, PermissionMode } from '../../shared/contracts'
 import { ContextBuilder } from '../context/context-builder'
 import type { ModelMessage, ModelProvider } from '../providers/model-provider'
@@ -50,6 +50,21 @@ export class AgentRunner {
     return { runId }
   }
 
+  resume(runId: string): { runId: string } {
+    if (this.active.has(runId)) throw new Error('Run is already active')
+    const checkpoint = this.dependencies.store.getCheckpoint(runId)
+    if (!checkpoint?.safeToResume) throw new Error('Run does not have a safe checkpoint to resume')
+    const active: ActiveRun = { controller: new AbortController() }
+    this.active.set(runId, active)
+    const input: StartInput = {
+      sessionId: checkpoint.sessionId,
+      prompt: checkpoint.prompt,
+      permissionMode: checkpoint.permissionMode
+    }
+    void this.execute(runId, input, active, checkpoint).catch(() => undefined)
+    return { runId }
+  }
+
   resolveApproval(runId: string, approvalId: string, decision: ApprovalDecision): void {
     const pending = this.active.get(runId)?.pendingApproval
     if (!pending || pending.id !== approvalId) throw new Error('Approval is not pending for this run')
@@ -63,30 +78,49 @@ export class AgentRunner {
     active.pendingApproval?.resolve('rejected')
   }
 
-  private async execute(runId: string, input: StartInput, active: ActiveRun): Promise<void> {
+  private async execute(runId: string, input: StartInput, active: ActiveRun, restored?: RunCheckpoint): Promise<void> {
     const { store, provider, tools, approvalPolicy, deepModel } = this.dependencies
     try {
-      const route = await this.dependencies.router?.route(input.prompt, active.controller.signal)
-      const model = route?.route === 'fast' && this.dependencies.fastModel ? this.dependencies.fastModel : deepModel
-      const attachedFiles: Array<{ path: string; content: string }> = []
-      for (const path of input.attachedFiles ?? []) {
-        try {
-          if (this.dependencies.loadAttachment) attachedFiles.push(await this.dependencies.loadAttachment(path))
-        } catch { /* an attachment can disappear between selection and send */ }
+      let model: string
+      let messages: ModelMessage[]
+      if (restored) {
+        model = restored.model
+        messages = structuredClone(restored.messages)
+      } else {
+        const route = await this.dependencies.router?.route(input.prompt, active.controller.signal)
+        model = route?.route === 'fast' && this.dependencies.fastModel ? this.dependencies.fastModel : deepModel
+        const attachedFiles: Array<{ path: string; content: string }> = []
+        for (const path of input.attachedFiles ?? []) {
+          try {
+            if (this.dependencies.loadAttachment) attachedFiles.push(await this.dependencies.loadAttachment(path))
+          } catch { /* an attachment can disappear between selection and send */ }
+        }
+        messages = (this.dependencies.contextBuilder ?? new ContextBuilder()).build({
+          systemPrompt: 'You are a careful coding agent. Always read an existing file before editing it. For localized changes, use propose_file_patch with exact unique search/replace blocks so unrelated code is preserved. Use propose_file_change only for new files or when providing the complete replacement file. Never place unified-diff markers or patch protocol markers inside file content. Inspect the workspace, make bounded proposals, run relevant checks, and report the result.',
+          attachedFiles,
+          userPrompt: input.prompt,
+          maxCharacters: 120_000
+        })
       }
-      const messages: ModelMessage[] = (this.dependencies.contextBuilder ?? new ContextBuilder()).build({
-        systemPrompt: 'You are a coding agent. Inspect the workspace with tools, make bounded proposals, run checks, and report the result.',
-        attachedFiles,
-        userPrompt: input.prompt,
-        maxCharacters: 120_000
+      const saveCheckpoint = (safeToResume: boolean): Promise<void> => store.saveCheckpoint(runId, {
+        sessionId: input.sessionId,
+        prompt: input.prompt,
+        permissionMode: input.permissionMode,
+        model,
+        messages,
+        safeToResume
       })
       const toolCallCounts = new Map<string, number>()
-      await store.appendMessage(input.sessionId, { role: 'user', content: input.prompt })
-      await store.createRun({ id: runId, sessionId: input.sessionId, status: 'queued' })
+      if (!restored) {
+        await store.appendMessage(input.sessionId, { role: 'user', content: input.prompt })
+        await store.createRun({ id: runId, sessionId: input.sessionId, status: 'queued' })
+      }
       await store.setRunStatus(runId, 'running')
-      await this.publish({ type: 'run.started', runId, timestamp: now() })
+      await this.publish({ type: restored ? 'run.resumed' : 'run.started', runId, timestamp: now() })
+      await saveCheckpoint(true)
 
       for (let iteration = 0; iteration < 20; iteration += 1) {
+        if (active.controller.signal.aborted) throw abortError()
         let assistantText = ''
         const toolCalls: Array<{ id: string; name: string; arguments: string }> = []
         for await (const event of provider.stream({
@@ -103,12 +137,14 @@ export class AgentRunner {
         if (toolCalls.length === 0) {
           await store.appendMessage(input.sessionId, { role: 'assistant', content: assistantText })
           await this.publish({ type: 'assistant.completed', runId, timestamp: now(), content: assistantText })
+          await store.clearCheckpoint(runId)
           await store.setRunStatus(runId, 'completed')
           await this.publish({ type: 'run.completed', runId, timestamp: now() })
           return
         }
 
         messages.push({ role: 'assistant', content: assistantText, toolCalls })
+        await saveCheckpoint(false)
         for (const call of toolCalls) {
           await this.publish({ type: 'tool.requested', runId, timestamp: now(), toolCallId: call.id, name: call.name, arguments: call.arguments })
           const signature = `${call.name}\u0000${call.arguments}`
@@ -179,17 +215,22 @@ export class AgentRunner {
             await this.publish({ type: 'tool.completed', runId, timestamp: now(), toolCallId: call.id, name: call.name, result })
           }
         }
+        await saveCheckpoint(true)
       }
       throw new Error('Agent stopped after reaching the 20 iteration limit')
     } catch (error) {
       if (active.controller.signal.aborted || (error instanceof Error && error.name === 'AbortError')) {
         if (store.getRun(runId)) {
           await store.setRunStatus(runId, 'cancelled')
+          await store.clearCheckpoint(runId)
           await this.publish({ type: 'run.cancelled', runId, timestamp: now() })
         }
       } else if (store.getRun(runId)) {
         await store.setRunStatus(runId, 'failed')
-        await this.publish({ type: 'run.failed', runId, timestamp: now(), message: safeErrorMessage(error) })
+        await this.publish({
+          type: 'run.failed', runId, timestamp: now(), message: safeErrorMessage(error),
+          resumable: Boolean(store.getCheckpoint(runId)?.safeToResume)
+        })
       }
     } finally {
       this.active.delete(runId)

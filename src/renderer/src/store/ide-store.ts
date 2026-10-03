@@ -1,7 +1,7 @@
 import { useStore } from 'zustand'
 import { createStore, type StoreApi } from 'zustand/vanilla'
 
-import type { AgentEvent, DesktopAPI, FileProposal, PermissionMode, RunStatus, WorkspaceEntry } from '../../../shared/contracts'
+import type { AgentEvent, ChatMessage, DesktopAPI, FileProposal, PermissionMode, RunStatus, WorkspaceEntry } from '../../../shared/contracts'
 import type { ToolActivityItem } from '../components/agent/ToolActivity'
 import { languageForPath } from '../lib/languages'
 
@@ -33,6 +33,7 @@ export interface IdeState {
   activeSessionId?: string
   activeRunId?: string
   permissionMode: PermissionMode
+  conversationMessages: ChatMessage[]
   agentRuns: Record<string, AgentRunView>
   openWorkspace(root: string): Promise<void>
   loadDirectory(path: string): Promise<void>
@@ -42,6 +43,7 @@ export interface IdeState {
   saveFile(path: string): Promise<void>
   closeFile(path: string, decision: 'save' | 'discard' | 'cancel'): Promise<void>
   sendAgentMessage(prompt: string): Promise<void>
+  resumeAgentRun(): Promise<void>
   cancelAgentRun(): Promise<void>
   reduceAgentEvent(event: AgentEvent): void
   resolveAgentApproval(runId: string, approvalId: string, decision: 'approved' | 'rejected'): Promise<void>
@@ -59,6 +61,7 @@ export interface AgentRunView {
   tools: ToolActivityItem[]
   approvals: Array<{ id: string; summary: string; status: 'pending' | 'approved' | 'rejected' }>
   proposals: FileProposal[]
+  resumable: boolean
   error?: string
 }
 
@@ -103,12 +106,16 @@ export function createIdeStore(options: StoreOptions = {}): IdeStore {
     buffers: {},
     loadingFiles: [],
     permissionMode: 'ask',
+    conversationMessages: [],
     agentRuns: {},
     async openWorkspace(root) {
       set({ loadingWorkspace: true, workspaceError: undefined })
       try {
         const opened = await desktop().workspace.open(root)
         const entries = await desktop().workspace.list('')
+        const sessions = await desktop().sessions.list()
+        const session = sessions.find((item) => sameWorkspace(item.workspaceRoot, opened.root))
+        const hydrated = session ? await hydrateConversation(desktop(), session.id) : undefined
         set({
           workspaceRoot: opened.root,
           entriesByDirectory: { '': entries },
@@ -117,9 +124,10 @@ export function createIdeStore(options: StoreOptions = {}): IdeStore {
           buffers: {},
           loadingFiles: [],
           activePath: undefined,
-          activeSessionId: undefined,
-          activeRunId: undefined,
-          agentRuns: {}
+          activeSessionId: session?.id,
+          activeRunId: hydrated?.activeRunId,
+          conversationMessages: session?.messages ?? [],
+          agentRuns: hydrated?.agentRuns ?? {}
         })
       } catch (error) {
         set({ loadingWorkspace: false, workspaceError: normalizeError(error) })
@@ -203,11 +211,24 @@ export function createIdeStore(options: StoreOptions = {}): IdeStore {
         sessionId = existing?.id ?? (await desktop().sessions.create({ title: workspaceRoot.split(/[\\/]/).at(-1) ?? 'Workspace', workspaceRoot })).id
         set({ activeSessionId: sessionId })
       }
+      const optimisticMessage: ChatMessage = {
+        id: `local-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+        role: 'user', content: prompt, createdAt: new Date().toISOString()
+      }
+      set((state) => ({ conversationMessages: [...state.conversationMessages, optimisticMessage] }))
       const result = await desktop().agent.start({
         sessionId, prompt, permissionMode: get().permissionMode,
         attachedFiles: get().activePath ? [get().activePath!] : []
       })
       set((state) => ({ activeRunId: result.runId, agentRuns: { ...state.agentRuns, [result.runId]: emptyAgentRun(result.runId) } }))
+    },
+    async resumeAgentRun() {
+      const runId = get().activeRunId
+      if (!runId) return
+      await desktop().agent.resume(runId)
+      set((state) => ({ agentRuns: { ...state.agentRuns, [runId]: {
+        ...(state.agentRuns[runId] ?? emptyAgentRun(runId)), status: 'running', resumable: false, error: undefined
+      } } }))
     },
     async cancelAgentRun() {
       const runId = get().activeRunId
@@ -215,22 +236,12 @@ export function createIdeStore(options: StoreOptions = {}): IdeStore {
     },
     reduceAgentEvent(event) {
       set((state) => {
-        const current = state.agentRuns[event.runId] ?? emptyAgentRun(event.runId)
-        const run: AgentRunView = { ...current, tools: [...current.tools], approvals: [...current.approvals], proposals: [...current.proposals] }
-        if (event.type === 'run.started') run.status = 'running'
-        else if (event.type === 'assistant.delta') run.assistantText += event.delta
-        else if (event.type === 'assistant.completed') run.assistantText = event.content
-        else if (event.type === 'tool.requested') run.tools.push({ id: event.toolCallId, name: event.name, status: 'requested' })
-        else if (event.type === 'tool.started') run.tools = updateTool(run.tools, event.toolCallId, { status: 'running' })
-        else if (event.type === 'tool.completed') run.tools = updateTool(run.tools, event.toolCallId, { status: 'completed', result: event.result })
-        else if (event.type === 'approval.requested') { run.status = 'waiting_approval'; run.approvals.push({ id: event.approvalId, summary: event.summary, status: 'pending' }) }
-        else if (event.type === 'approval.resolved') { run.status = 'running'; run.approvals = run.approvals.map((item) => item.id === event.approvalId ? { ...item, status: event.decision } : item) }
-        else if (event.type === 'file.proposed') run.proposals.push({ id: event.proposalId, runId: event.runId, kind: 'write', path: event.path, diff: event.diff, status: 'pending' })
-        else if (event.type === 'file.applied') run.proposals = run.proposals.map((item) => item.id === event.proposalId ? { ...item, status: 'applied' } : item)
-        else if (event.type === 'run.completed') run.status = 'completed'
-        else if (event.type === 'run.cancelled') run.status = 'cancelled'
-        else if (event.type === 'run.failed') { run.status = 'failed'; run.error = event.message }
-        return { activeRunId: state.activeRunId ?? event.runId, agentRuns: { ...state.agentRuns, [event.runId]: run } }
+        const run = reduceRun(state.agentRuns[event.runId] ?? emptyAgentRun(event.runId), event)
+        const alreadyHasAnswer = state.conversationMessages.some((message) => message.id === `${event.runId}-assistant`)
+        const conversationMessages = event.type === 'assistant.completed' && !alreadyHasAnswer
+          ? [...state.conversationMessages, { id: `${event.runId}-assistant`, role: 'assistant' as const, content: event.content, createdAt: event.timestamp }]
+          : state.conversationMessages
+        return { activeRunId: state.activeRunId ?? event.runId, conversationMessages, agentRuns: { ...state.agentRuns, [event.runId]: run } }
       })
     },
     async resolveAgentApproval(runId, approvalId, decision) {
@@ -258,7 +269,50 @@ export function createIdeStore(options: StoreOptions = {}): IdeStore {
 }
 
 function emptyAgentRun(id: string): AgentRunView {
-  return { id, status: 'queued', assistantText: '', tools: [], approvals: [], proposals: [] }
+  return { id, status: 'queued', assistantText: '', tools: [], approvals: [], proposals: [], resumable: false }
+}
+
+function reduceRun(current: AgentRunView, event: AgentEvent): AgentRunView {
+  const run: AgentRunView = { ...current, tools: [...current.tools], approvals: [...current.approvals], proposals: [...current.proposals] }
+  if (event.type === 'run.started' || event.type === 'run.resumed') { run.status = 'running'; run.resumable = false; run.error = undefined }
+  else if (event.type === 'assistant.delta') run.assistantText += event.delta
+  else if (event.type === 'assistant.completed') run.assistantText = event.content
+  else if (event.type === 'tool.requested') run.tools.push({ id: event.toolCallId, name: event.name, status: 'requested' })
+  else if (event.type === 'tool.started') run.tools = updateTool(run.tools, event.toolCallId, { status: 'running' })
+  else if (event.type === 'tool.completed') run.tools = updateTool(run.tools, event.toolCallId, { status: 'completed', result: event.result })
+  else if (event.type === 'approval.requested') { run.status = 'waiting_approval'; run.approvals.push({ id: event.approvalId, summary: event.summary, status: 'pending' }) }
+  else if (event.type === 'approval.resolved') { run.status = 'running'; run.approvals = run.approvals.map((item) => item.id === event.approvalId ? { ...item, status: event.decision } : item) }
+  else if (event.type === 'file.proposed' && !run.proposals.some((item) => item.id === event.proposalId)) run.proposals.push({ id: event.proposalId, runId: event.runId, kind: 'write', path: event.path, diff: event.diff, status: 'pending' })
+  else if (event.type === 'file.applied') run.proposals = run.proposals.map((item) => item.id === event.proposalId ? { ...item, status: 'applied' } : item)
+  else if (event.type === 'run.completed') { run.status = 'completed'; run.resumable = false }
+  else if (event.type === 'run.cancelled') { run.status = 'cancelled'; run.resumable = false }
+  else if (event.type === 'run.failed') { run.status = 'failed'; run.error = event.message; run.resumable = event.resumable }
+  return run
+}
+
+async function hydrateConversation(desktop: DesktopAPI, sessionId: string): Promise<{ activeRunId?: string; agentRuns: Record<string, AgentRunView> }> {
+  const [summaries, proposals] = await Promise.all([desktop.sessions.listRuns(sessionId), desktop.agent.listProposals()])
+  const events = await Promise.all(summaries.map((run) => desktop.sessions.events(run.id)))
+  const agentRuns: Record<string, AgentRunView> = {}
+  summaries.forEach((summary, index) => {
+    let view = emptyAgentRun(summary.id)
+    for (const event of events[index]) view = reduceRun(view, event)
+    view.status = summary.status
+    view.resumable = summary.resumable
+    view.proposals = mergeProposals(view.proposals, proposals.filter((proposal) => proposal.runId === summary.id))
+    agentRuns[summary.id] = view
+  })
+  return { activeRunId: summaries.at(-1)?.id, agentRuns }
+}
+
+function mergeProposals(fromEvents: FileProposal[], persisted: FileProposal[]): FileProposal[] {
+  const values = new Map(fromEvents.map((proposal) => [proposal.id, proposal]))
+  for (const proposal of persisted) values.set(proposal.id, proposal)
+  return [...values.values()]
+}
+
+function sameWorkspace(left: string, right: string): boolean {
+  return left.replace(/\\/g, '/').replace(/\/$/, '').toLowerCase() === right.replace(/\\/g, '/').replace(/\/$/, '').toLowerCase()
 }
 
 function updateTool(items: ToolActivityItem[], id: string, update: Partial<ToolActivityItem>): ToolActivityItem[] {
