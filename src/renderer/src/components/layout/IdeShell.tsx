@@ -6,6 +6,7 @@ import { FileTree } from '../workspace/FileTree'
 import { Welcome } from '../workspace/Welcome'
 import { ActivityBar } from './ActivityBar'
 import { ResizablePanel } from './ResizablePanel'
+import { EditorArea } from '../editor/EditorArea'
 
 export function IdeShell(): React.JSX.Element {
   const workspaceRoot = useIdeStore((state) => state.workspaceRoot)
@@ -16,7 +17,6 @@ export function IdeShell(): React.JSX.Element {
   const selectActivity = useIdeStore((state) => state.selectActivity)
   const sizes = useIdeStore((state) => state.panelSizes)
   const setSize = useIdeStore((state) => state.setPanelSize)
-  const activePath = useIdeStore((state) => state.activePath)
   const [createOpen, setCreateOpen] = useState(false)
 
   if (!workspaceRoot) return <><Welcome loading={loading} error={error} onOpen={openWorkspace} onCreate={() => setCreateOpen(true)} /><CreateProjectDialog open={createOpen} onClose={() => setCreateOpen(false)} onCreate={() => setCreateOpen(false)} /></>
@@ -29,7 +29,7 @@ export function IdeShell(): React.JSX.Element {
         {activity === 'files' ? <FileTree /> : <div className="empty-panel">Painel {activity} em preparacao</div>}
       </ResizablePanel>
       <section className="workbench">
-        <div className="editor-placeholder"><span className="eyebrow">EDITOR</span><h2>{activePath ?? 'Selecione um arquivo'}</h2><p>O Monaco Editor sera conectado aqui na proxima etapa.</p></div>
+        <EditorArea />
         <ResizablePanel axis="y" size={sizes.bottom} onSize={(size) => setSize('bottom', size)} className="bottom-panel"><header className="panel-header">TERMINAL</header><div className="terminal-placeholder">Terminal pronto para conectar.</div></ResizablePanel>
       </section>
       <ResizablePanel size={sizes.agent} onSize={(size) => setSize('agent', size)} className="agent-panel"><header className="panel-header"><span>AGENTE</span><small>GROQ</small></header><div className="agent-empty"><span className="agent-spark">✦</span><h3>O que vamos construir?</h3><p>O chat e as aprovacoes entram nas proximas etapas.</p></div></ResizablePanel>
