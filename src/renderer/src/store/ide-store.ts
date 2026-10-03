@@ -1,7 +1,7 @@
 import { useStore } from 'zustand'
 import { createStore, type StoreApi } from 'zustand/vanilla'
 
-import type { AgentEvent, ChatMessage, DesktopAPI, FileProposal, PermissionMode, RunStatus, WorkspaceEntry } from '../../../shared/contracts'
+import type { AgentEvent, ChatMessage, ChatRecord, DesktopAPI, FileProposal, PermissionMode, RunStatus, WorkspaceEntry, WorkspaceRecord } from '../../../shared/contracts'
 import type { ToolActivityItem } from '../components/agent/ToolActivity'
 import { languageForPath } from '../lib/languages'
 
@@ -20,6 +20,10 @@ interface PersistedLayout {
 
 export interface IdeState {
   workspaceRoot?: string
+  currentWorkspaceId?: string
+  knownWorkspaces: WorkspaceRecord[]
+  recentWorkspaces: WorkspaceRecord[]
+  chats: ChatRecord[]
   workspaceError?: { code: string; message: string }
   loadingWorkspace: boolean
   loadingDirectories: string[]
@@ -35,6 +39,7 @@ export interface IdeState {
   permissionMode: PermissionMode
   conversationMessages: ChatMessage[]
   agentRuns: Record<string, AgentRunView>
+  loadKnownWorkspaces(): Promise<void>
   openWorkspace(root: string): Promise<void>
   loadDirectory(path: string): Promise<void>
   selectFile(path: string): void
@@ -98,6 +103,9 @@ export function createIdeStore(options: StoreOptions = {}): IdeStore {
   }
   return createStore<IdeState>((set, get) => ({
     loadingWorkspace: false,
+    knownWorkspaces: [],
+    recentWorkspaces: [],
+    chats: [],
     loadingDirectories: [],
     entriesByDirectory: {},
     selectedActivity: layout.selectedActivity,
@@ -108,16 +116,39 @@ export function createIdeStore(options: StoreOptions = {}): IdeStore {
     permissionMode: 'ask',
     conversationMessages: [],
     agentRuns: {},
+    async loadKnownWorkspaces() {
+      const conversations = desktop().conversations
+      if (!conversations) return
+      const knownWorkspaces = await conversations.listWorkspaces()
+      set({ knownWorkspaces, recentWorkspaces: knownWorkspaces.slice(0, 5) })
+    },
     async openWorkspace(root) {
       set({ loadingWorkspace: true, workspaceError: undefined })
       try {
         const opened = await desktop().workspace.open(root)
         const entries = await desktop().workspace.list('')
+        const conversationApi = desktop().conversations
+        let workspaceRecord: WorkspaceRecord | undefined
+        let chats: ChatRecord[] = []
+        if (conversationApi) {
+          try {
+            workspaceRecord = await conversationApi.touchWorkspace(opened.root)
+            chats = await conversationApi.listChats(workspaceRecord.id, true)
+          } catch { /* recent-workspace persistence must not prevent opening a local folder */ }
+        }
         const sessions = await desktop().sessions.list()
         const session = sessions.find((item) => sameWorkspace(item.workspaceRoot, opened.root))
         const hydrated = session ? await hydrateConversation(desktop(), session.id) : undefined
         set({
           workspaceRoot: opened.root,
+          currentWorkspaceId: workspaceRecord?.id,
+          chats,
+          knownWorkspaces: workspaceRecord
+            ? [workspaceRecord, ...get().knownWorkspaces.filter((item) => item.id !== workspaceRecord.id)]
+            : get().knownWorkspaces,
+          recentWorkspaces: workspaceRecord
+            ? [workspaceRecord, ...get().recentWorkspaces.filter((item) => item.id !== workspaceRecord.id)].slice(0, 5)
+            : get().recentWorkspaces,
           entriesByDirectory: { '': entries },
           loadingWorkspace: false,
           openTabs: [],

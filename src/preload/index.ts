@@ -30,6 +30,14 @@ const desktop: DesktopAPI = {
       return () => ipcRenderer.removeListener('agent:event', handler)
     }
   },
+  conversations: {
+    listWorkspaces: () => ipcRenderer.invoke('conversations:listWorkspaces'),
+    touchWorkspace: (root) => ipcRenderer.invoke('conversations:touchWorkspace', { root }),
+    listChats: (workspaceId, includeArchived = false) => ipcRenderer.invoke('conversations:listChats', { workspaceId, includeArchived }),
+    createChat: (workspaceId, title) => ipcRenderer.invoke('conversations:createChat', { workspaceId, title }),
+    renameChat: (chatId, title) => ipcRenderer.invoke('conversations:renameChat', { chatId, title }),
+    archiveChat: (chatId) => ipcRenderer.invoke('conversations:archiveChat', { chatId })
+  },
   settings: {
     models: () => ipcRenderer.invoke('settings:models')
   },

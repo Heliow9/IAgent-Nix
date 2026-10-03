@@ -1,6 +1,6 @@
 import { describe, expect, test, vi } from 'vitest'
 
-import type { DesktopAPI, SessionRecord } from '../../../shared/contracts'
+import type { DesktopAPI, SessionRecord, WorkspaceRecord } from '../../../shared/contracts'
 import { createIdeStore, type KeyValueStorage } from './ide-store'
 
 describe('IDE store', () => {
@@ -28,6 +28,37 @@ describe('IDE store', () => {
     expect(store.getState().workspaceRoot).toBe('C:/project')
     expect(store.getState().entriesByDirectory['']).toHaveLength(1)
     expect(store.getState().loadingWorkspace).toBe(false)
+  })
+
+  test('loads the five most recent workspaces for the welcome screen', async () => {
+    const workspaces = Array.from({ length: 7 }, (_, index): WorkspaceRecord => ({
+      id: `00000000-0000-4000-8000-00000000000${index}`, name: `Projeto ${index}`,
+      localRootPath: `C:/project-${index}`, createdAt: '2026-10-03T12:00:00.000Z',
+      updatedAt: `2026-10-03T12:00:0${index}.000Z`, lastOpenedAt: `2026-10-03T12:00:0${index}.000Z`,
+      revision: 1, deletedAt: null
+    })).reverse()
+    const store = createIdeStore({ desktop: () => fakeDesktop({}, { conversations: { listWorkspaces: async () => workspaces } }), storage: memoryStorage() })
+
+    await store.getState().loadKnownWorkspaces()
+
+    expect(store.getState().recentWorkspaces).toEqual(workspaces.slice(0, 5))
+    expect(store.getState().knownWorkspaces).toHaveLength(7)
+  })
+
+  test('records a workspace as recent as soon as it opens', async () => {
+    const touchWorkspace = vi.fn(async (root: string): Promise<WorkspaceRecord> => ({
+      id: '00000000-0000-4000-8000-000000000001', name: 'Project', localRootPath: root,
+      createdAt: '2026-10-03T12:00:00.000Z', updatedAt: '2026-10-03T12:00:00.000Z',
+      lastOpenedAt: '2026-10-03T12:00:00.000Z', revision: 1, deletedAt: null
+    }))
+    const store = createIdeStore({ desktop: () => fakeDesktop({ open: async () => ({ root: 'C:/project' }) }, {
+      conversations: { touchWorkspace, listChats: async () => [], createChat: async () => { throw new Error('unused') } }
+    }), storage: memoryStorage() })
+
+    await store.getState().openWorkspace('C:/project')
+
+    expect(touchWorkspace).toHaveBeenCalledWith('C:/project')
+    expect(store.getState().recentWorkspaces[0]?.localRootPath).toBe('C:/project')
   })
 
   test('keeps structured workspace errors for display', async () => {
@@ -177,6 +208,7 @@ function memoryStorage(): KeyValueStorage {
 function fakeDesktop(workspace: Partial<DesktopAPI['workspace']> = {}, services: {
   sessions?: Partial<DesktopAPI['sessions']>
   agent?: Partial<DesktopAPI['agent']>
+  conversations?: Partial<NonNullable<DesktopAPI['conversations']>>
 } = {}): DesktopAPI {
   return {
     app: { platform: 'win32', electronVersion: '38' },
@@ -186,6 +218,11 @@ function fakeDesktop(workspace: Partial<DesktopAPI['workspace']> = {}, services:
       search: async () => [], ...workspace
     },
     sessions: { list: async () => [], create: async () => { throw new Error('unused') }, appendMessage: async () => { throw new Error('unused') }, listRuns: async () => [], events: async () => [], onAgentEvent: () => () => undefined, ...services.sessions },
+    conversations: {
+      listWorkspaces: async () => [], touchWorkspace: async () => { throw new Error('unused') }, listChats: async () => [],
+      createChat: async () => { throw new Error('unused') }, renameChat: async () => { throw new Error('unused') }, archiveChat: async () => { throw new Error('unused') },
+      ...services.conversations
+    },
     settings: { models: async () => ({ fastModel: 'fast', deepModel: 'deep' }) },
     projects: { preview: async () => { throw new Error('unused') }, create: async () => { throw new Error('unused') } },
     agent: { start: async () => ({ runId: 'run' }), resume: async (runId) => ({ runId }), cancel: async () => undefined, resolveApproval: async () => undefined, listProposals: async () => [], applyProposal: async () => { throw new Error('unused') }, rejectProposal: async () => { throw new Error('unused') }, ...services.agent },

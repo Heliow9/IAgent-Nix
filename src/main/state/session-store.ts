@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 
-import type { AgentEvent, ChatMessage, FileProposal, PermissionMode, RunRecord, RunStatus, RunSummary, SessionRecord } from '../../shared/contracts'
+import type { AgentEvent, ChatMessage, ChatRecord, FileProposal, PermissionMode, RunRecord, RunStatus, RunSummary, SessionRecord, WorkspaceRecord } from '../../shared/contracts'
 import type { ModelMessage } from '../../agent/providers/model-provider'
 
 export interface RunCheckpoint {
@@ -14,9 +14,19 @@ export interface RunCheckpoint {
   safeToResume: boolean
 }
 
+interface StoredSession extends SessionRecord {
+  workspaceId: string
+  titleSource: ChatRecord['titleSource']
+  status: ChatRecord['status']
+  summary: string
+  revision: number
+  deletedAt: string | null
+}
+
 interface PersistedState {
-  version: 1
-  sessions: SessionRecord[]
+  version: 2
+  workspaces: WorkspaceRecord[]
+  sessions: StoredSession[]
   runs: RunRecord[]
   events: Record<string, AgentEvent[]>
   checkpoints: Record<string, RunCheckpoint>
@@ -40,8 +50,9 @@ export class SessionStore {
     let needsInitialWrite = false
     try {
       const parsed: unknown = JSON.parse(await readFile(filePath, 'utf8'))
-      if (!isPersistedState(parsed)) throw new Error('Unsupported session store shape')
-      state = normalizeState(parsed)
+      if (isPersistedStateV2(parsed)) state = normalizeState(parsed)
+      else if (isPersistedStateV1(parsed)) { state = migrateV1(parsed); needsInitialWrite = true }
+      else throw new Error('Unsupported session store shape')
     } catch (error) {
       if (isMissingFile(error)) needsInitialWrite = true
       else {
@@ -55,14 +66,78 @@ export class SessionStore {
   }
 
   async createSession(input: { title: string; workspaceRoot: string }): Promise<SessionRecord> {
+    const workspace = await this.touchWorkspace(input.workspaceRoot)
+    const chat = await this.createChat(workspace.id, input.title)
+    return this.getSession(chat.id)!
+  }
+
+  async touchWorkspace(root: string): Promise<WorkspaceRecord> {
     const now = new Date().toISOString()
-    const session: SessionRecord = {
-      id: randomUUID(), title: input.title, workspaceRoot: input.workspaceRoot,
+    const normalized = normalizeWorkspacePath(root)
+    let workspace = this.state.workspaces.find((item) => normalizeWorkspacePath(item.localRootPath) === normalized && !item.deletedAt)
+    if (workspace) {
+      workspace.localRootPath = root
+      workspace.name = workspaceName(root)
+      workspace.lastOpenedAt = now
+      workspace.updatedAt = now
+      workspace.revision += 1
+    } else {
+      workspace = {
+        id: randomUUID(), name: workspaceName(root), localRootPath: root,
+        createdAt: now, updatedAt: now, lastOpenedAt: now, revision: 1, deletedAt: null
+      }
+      this.state.workspaces.push(workspace)
+    }
+    await this.persist()
+    return structuredClone(workspace)
+  }
+
+  listWorkspaces(limit?: number): WorkspaceRecord[] {
+    const workspaces = structuredClone(this.state.workspaces)
+      .filter((item) => !item.deletedAt)
+      .sort((left, right) => right.lastOpenedAt.localeCompare(left.lastOpenedAt))
+    return limit ? workspaces.slice(0, limit) : workspaces
+  }
+
+  async createChat(workspaceId: string, title = 'Novo chat'): Promise<ChatRecord> {
+    const workspace = this.state.workspaces.find((item) => item.id === workspaceId && !item.deletedAt)
+    if (!workspace) throw new Error(`Unknown workspace: ${workspaceId}`)
+    const now = new Date().toISOString()
+    const session: StoredSession = {
+      id: randomUUID(), title, workspaceRoot: workspace.localRootPath, workspaceId,
+      titleSource: 'provisional', status: 'active', summary: '', revision: 1, deletedAt: null,
       permissionMode: 'ask', messages: [], createdAt: now, updatedAt: now
     }
     this.state.sessions.push(session)
     await this.persist()
-    return structuredClone(session)
+    return chatFromSession(session)
+  }
+
+  listChats(workspaceId: string, includeArchived = false): ChatRecord[] {
+    return this.state.sessions
+      .filter((item) => item.workspaceId === workspaceId && !item.deletedAt && (includeArchived || item.status === 'active'))
+      .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
+      .map(chatFromSession)
+  }
+
+  async renameChat(chatId: string, title: string, source: ChatRecord['titleSource'] = 'manual'): Promise<ChatRecord> {
+    const session = this.requireSession(chatId) as StoredSession
+    if (source === 'generated' && session.titleSource === 'manual') return chatFromSession(session)
+    session.title = title.trim() || session.title
+    session.titleSource = source
+    session.updatedAt = new Date().toISOString()
+    session.revision += 1
+    await this.persist()
+    return chatFromSession(session)
+  }
+
+  async archiveChat(chatId: string): Promise<ChatRecord> {
+    const session = this.requireSession(chatId) as StoredSession
+    session.status = 'archived'
+    session.updatedAt = new Date().toISOString()
+    session.revision += 1
+    await this.persist()
+    return chatFromSession(session)
   }
 
   listSessions(): SessionRecord[] {
@@ -77,7 +152,8 @@ export class SessionStore {
   async appendMessage(sessionId: string, input: Pick<ChatMessage, 'role' | 'content'>): Promise<ChatMessage> {
     const session = this.requireSession(sessionId)
     const message: ChatMessage = {
-      id: randomUUID(), role: input.role, content: input.content, createdAt: new Date().toISOString()
+      id: randomUUID(), chatId: sessionId, role: input.role, content: input.content,
+      attachments: [], referencedChatIds: [], createdAt: new Date().toISOString(), revision: 1, deletedAt: null
     }
     session.messages.push(message)
     session.updatedAt = message.createdAt
@@ -206,24 +282,87 @@ export class SessionStore {
 }
 
 function emptyState(): PersistedState {
-  return { version: 1, sessions: [], runs: [], events: {}, checkpoints: {}, proposals: [] }
+  return { version: 2, workspaces: [], sessions: [], runs: [], events: {}, checkpoints: {}, proposals: [] }
 }
 
-function isPersistedState(value: unknown): value is PersistedState {
+interface PersistedStateV1 extends Omit<PersistedState, 'version' | 'workspaces' | 'sessions'> {
+  version: 1
+  sessions: SessionRecord[]
+}
+
+function isPersistedStateV2(value: unknown): value is PersistedState {
   if (!value || typeof value !== 'object') return false
   const state = value as Partial<PersistedState>
+  return state.version === 2 && Array.isArray(state.workspaces) && Array.isArray(state.sessions) && Array.isArray(state.runs) && Boolean(state.events) && typeof state.events === 'object'
+}
+
+function isPersistedStateV1(value: unknown): value is PersistedStateV1 {
+  if (!value || typeof value !== 'object') return false
+  const state = value as Partial<PersistedStateV1>
   return state.version === 1 && Array.isArray(state.sessions) && Array.isArray(state.runs) && Boolean(state.events) && typeof state.events === 'object'
 }
 
 function normalizeState(value: PersistedState): PersistedState {
   return {
-    version: 1,
+    version: 2,
+    workspaces: value.workspaces,
     sessions: value.sessions,
     runs: value.runs,
     events: value.events,
     checkpoints: value.checkpoints && typeof value.checkpoints === 'object' ? value.checkpoints : {},
     proposals: Array.isArray(value.proposals) ? value.proposals : []
   }
+}
+
+function migrateV1(value: PersistedStateV1): PersistedState {
+  const workspaces = new Map<string, WorkspaceRecord>()
+  const sessions: StoredSession[] = value.sessions.map((session) => {
+    const key = normalizeWorkspacePath(session.workspaceRoot)
+    let workspace = workspaces.get(key)
+    if (!workspace) {
+      workspace = {
+        id: randomUUID(), name: workspaceName(session.workspaceRoot), localRootPath: session.workspaceRoot,
+        createdAt: session.createdAt, updatedAt: session.updatedAt, lastOpenedAt: session.updatedAt,
+        revision: 1, deletedAt: null
+      }
+      workspaces.set(key, workspace)
+    } else if (session.updatedAt > workspace.lastOpenedAt) {
+      workspace.updatedAt = session.updatedAt
+      workspace.lastOpenedAt = session.updatedAt
+    }
+    return {
+      ...session,
+      messages: session.messages.map((message) => ({
+        ...message, chatId: session.id, attachments: message.attachments ?? [],
+        referencedChatIds: message.referencedChatIds ?? [], revision: message.revision ?? 1,
+        deletedAt: message.deletedAt ?? null
+      })),
+      workspaceId: workspace.id, titleSource: 'manual', status: 'active', summary: '', revision: 1, deletedAt: null
+    }
+  })
+  return {
+    version: 2, workspaces: [...workspaces.values()], sessions,
+    runs: value.runs, events: value.events,
+    checkpoints: value.checkpoints && typeof value.checkpoints === 'object' ? value.checkpoints : {},
+    proposals: Array.isArray(value.proposals) ? value.proposals : []
+  }
+}
+
+function chatFromSession(session: StoredSession): ChatRecord {
+  return {
+    id: session.id, workspaceId: session.workspaceId, title: session.title,
+    titleSource: session.titleSource, status: session.status, summary: session.summary,
+    createdAt: session.createdAt, updatedAt: session.updatedAt, revision: session.revision,
+    deletedAt: session.deletedAt
+  }
+}
+
+function normalizeWorkspacePath(value: string): string {
+  return value.replace(/\\/g, '/').replace(/\/$/, '').toLowerCase()
+}
+
+function workspaceName(value: string): string {
+  return value.replace(/[\\/]+$/, '').split(/[\\/]/).at(-1) || value
 }
 
 function isMissingFile(error: unknown): boolean {

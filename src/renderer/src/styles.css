@@ -21,6 +21,15 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .welcome-copy h1 { margin: 20px 0 24px; font-size: clamp(46px, 6.5vw, 92px); line-height: .96; letter-spacing: -.06em; }
 .welcome-copy > p { max-width: 650px; color: #99a8bd; font-size: 18px; line-height: 1.7; }
 .open-row { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 36px; }
+.recent-workspaces { margin-top: 38px; }
+.recent-workspaces > header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+.recent-workspaces h2 { margin: 0; font-size: 15px; }
+.recent-workspaces header button { border: 0; color: #61e6b0; background: transparent; cursor: pointer; font-size: 12px; }
+.recent-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 8px; }
+.recent-workspace, .workspace-search-results button { display: grid; gap: 4px; min-width: 0; padding: 12px; border: 1px solid #273246; border-radius: 9px; color: #dfe8f5; background: #101722; cursor: pointer; text-align: left; }
+.recent-workspace:hover, .workspace-search-results button:hover { border-color: #4a806c; background: #13231e; }
+.recent-workspace span, .workspace-search-results span { overflow: hidden; color: #697991; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.workspaces-dialog > header { display: flex; align-items: start; justify-content: space-between; }.workspaces-dialog > header h2 { margin: 8px 0 16px; }.workspaces-dialog > header button { border: 0; color: #8492a7; background: transparent; cursor: pointer; font-size: 24px; }.workspaces-dialog > input { width: 100%; }.workspace-search-results { display: grid; max-height: 360px; gap: 7px; margin-top: 14px; overflow: auto; }
 .open-row input { flex: 1 1 320px; min-width: 240px; }
 input, select { min-height: 42px; padding: 0 13px; border: 1px solid #273246; border-radius: 8px; color: #e7edf7; background: #101722; }
 .primary-button, .secondary-button { min-height: 42px; padding: 0 17px; border-radius: 8px; cursor: pointer; }

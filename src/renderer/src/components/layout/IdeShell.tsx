@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 
 import { useIdeStore } from '../../store/ide-store'
 import { CreateProjectDialog } from '../workspace/CreateProjectDialog'
@@ -15,13 +15,18 @@ export function IdeShell(): React.JSX.Element {
   const error = useIdeStore((state) => state.workspaceError)
   const loading = useIdeStore((state) => state.loadingWorkspace)
   const openWorkspace = useIdeStore((state) => state.openWorkspace)
+  const loadKnownWorkspaces = useIdeStore((state) => state.loadKnownWorkspaces)
+  const recentWorkspaces = useIdeStore((state) => state.recentWorkspaces)
+  const knownWorkspaces = useIdeStore((state) => state.knownWorkspaces)
   const activity = useIdeStore((state) => state.selectedActivity)
   const selectActivity = useIdeStore((state) => state.selectActivity)
   const sizes = useIdeStore((state) => state.panelSizes)
   const setSize = useIdeStore((state) => state.setPanelSize)
   const [createOpen, setCreateOpen] = useState(false)
 
-  if (!workspaceRoot) return <><Welcome loading={loading} error={error} onOpen={openWorkspace} onCreate={() => setCreateOpen(true)} /><CreateProjectDialog
+  useEffect(() => { void loadKnownWorkspaces() }, [loadKnownWorkspaces])
+
+  if (!workspaceRoot) return <><Welcome loading={loading} error={error} onOpen={openWorkspace} onCreate={() => setCreateOpen(true)} recentWorkspaces={recentWorkspaces} allWorkspaces={knownWorkspaces} /><CreateProjectDialog
     open={createOpen}
     onClose={() => setCreateOpen(false)}
     onPreview={(draft) => window.desktop.projects.preview(draft)}

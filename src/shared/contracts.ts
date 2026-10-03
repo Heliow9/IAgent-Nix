@@ -27,6 +27,7 @@ const eventBase = {
 }
 
 export const agentEventSchema = z.discriminatedUnion('type', [
+  z.object({ ...eventBase, type: z.literal('run.queued'), queuePosition: z.number().int().positive() }),
   z.object({ ...eventBase, type: z.literal('run.started') }),
   z.object({ ...eventBase, type: z.literal('run.resumed') }),
   z.object({ ...eventBase, type: z.literal('assistant.delta'), delta: z.string() }),
@@ -47,11 +48,43 @@ export type AgentEvent = z.infer<typeof agentEventSchema>
 
 export const chatMessageSchema = z.object({
   id: z.string().min(1),
+  chatId: z.string().min(1).optional(),
   role: z.enum(['user', 'assistant', 'system', 'tool']),
   content: z.string(),
-  createdAt: z.string().datetime()
+  attachments: z.array(z.string()).optional(),
+  referencedChatIds: z.array(z.string()).optional(),
+  createdAt: z.string().datetime(),
+  revision: z.number().int().positive().optional(),
+  deletedAt: z.string().datetime().nullable().optional()
 })
 export type ChatMessage = z.infer<typeof chatMessageSchema>
+
+export const workspaceRecordSchema = z.object({
+  id: z.string().uuid(),
+  name: z.string().min(1),
+  localRootPath: z.string().min(1),
+  remoteProjectId: z.string().min(1).nullable().optional(),
+  createdAt: z.string().datetime(),
+  updatedAt: z.string().datetime(),
+  lastOpenedAt: z.string().datetime(),
+  revision: z.number().int().positive(),
+  deletedAt: z.string().datetime().nullable().default(null)
+})
+export type WorkspaceRecord = z.infer<typeof workspaceRecordSchema>
+
+export const chatRecordSchema = z.object({
+  id: z.string().uuid(),
+  workspaceId: z.string().uuid(),
+  title: z.string().min(1),
+  titleSource: z.enum(['provisional', 'generated', 'manual']),
+  status: z.enum(['active', 'archived']),
+  summary: z.string(),
+  createdAt: z.string().datetime(),
+  updatedAt: z.string().datetime(),
+  revision: z.number().int().positive(),
+  deletedAt: z.string().datetime().nullable().default(null)
+})
+export type ChatRecord = z.infer<typeof chatRecordSchema>
 
 export const sessionRecordSchema = z.object({
   id: z.string().min(1),
@@ -68,6 +101,11 @@ export const runRecordSchema = z.object({
   id: z.string().min(1),
   sessionId: z.string().min(1),
   status: runStatusSchema,
+  queueSequence: z.number().int().positive().optional(),
+  prompt: z.string().optional(),
+  permissionMode: permissionModeSchema.optional(),
+  attachedFiles: z.array(z.string()).optional(),
+  referencedChatIds: z.array(z.string()).optional(),
   createdAt: z.string().datetime(),
   updatedAt: z.string().datetime()
 })
@@ -124,7 +162,8 @@ export const startAgentRunRequestSchema = z.object({
   sessionId: z.string().min(1),
   prompt: z.string().min(1),
   permissionMode: permissionModeSchema.default('ask'),
-  attachedFiles: z.array(z.string()).default([])
+  attachedFiles: z.array(z.string()).default([]),
+  referencedChatIds: z.array(z.string()).default([])
 })
 
 export interface DesktopAPI {
@@ -148,6 +187,14 @@ export interface DesktopAPI {
     events(runId: string): Promise<AgentEvent[]>
     onAgentEvent(listener: (event: AgentEvent) => void): () => void
   }
+  conversations?: {
+    listWorkspaces(): Promise<WorkspaceRecord[]>
+    touchWorkspace(root: string): Promise<WorkspaceRecord>
+    listChats(workspaceId: string, includeArchived?: boolean): Promise<ChatRecord[]>
+    createChat(workspaceId: string, title?: string): Promise<ChatRecord>
+    renameChat(chatId: string, title: string): Promise<ChatRecord>
+    archiveChat(chatId: string): Promise<ChatRecord>
+  }
   settings: {
     models(): Promise<ModelSettings>
   }
@@ -156,7 +203,7 @@ export interface DesktopAPI {
     create(input: ProjectTemplateInput, confirmationToken: string): Promise<ProjectPreview>
   }
   agent: {
-    start(input: z.input<typeof startAgentRunRequestSchema>): Promise<{ runId: string }>
+    start(input: z.input<typeof startAgentRunRequestSchema>): Promise<{ runId: string; status?: RunStatus; queuePosition?: number }>
     resume(runId: string): Promise<{ runId: string }>
     cancel(runId: string): Promise<void>
     resolveApproval(runId: string, approvalId: string, decision: 'approved' | 'rejected'): Promise<void>
