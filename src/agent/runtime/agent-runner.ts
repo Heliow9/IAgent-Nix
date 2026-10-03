@@ -3,7 +3,9 @@ import { randomUUID } from 'node:crypto'
 import type { RunEventBus } from '../../main/state/run-events'
 import type { SessionStore } from '../../main/state/session-store'
 import type { AgentEvent, PermissionMode } from '../../shared/contracts'
+import { ContextBuilder } from '../context/context-builder'
 import type { ModelMessage, ModelProvider } from '../providers/model-provider'
+import type { TaskRoute } from '../router/task-router'
 import { ToolRegistry, ToolRegistryError } from '../tools/tool-registry'
 import type { ApprovalPolicy } from './approval-policy'
 
@@ -14,12 +16,18 @@ interface AgentRunnerDependencies {
   eventBus: RunEventBus
   approvalPolicy: ApprovalPolicy
   deepModel: string
+  fastModel?: string
+  router?: { route(input: string, signal?: AbortSignal): Promise<TaskRoute> }
+  contextBuilder?: ContextBuilder
+  loadAttachment?: (path: string) => Promise<{ path: string; content: string }>
+  applyProposal?: (proposalId: string) => Promise<unknown>
 }
 
 interface StartInput {
   sessionId: string
   prompt: string
   permissionMode: PermissionMode
+  attachedFiles?: string[]
 }
 
 type ApprovalDecision = 'approved' | 'rejected'
@@ -57,11 +65,21 @@ export class AgentRunner {
 
   private async execute(runId: string, input: StartInput, active: ActiveRun): Promise<void> {
     const { store, provider, tools, approvalPolicy, deepModel } = this.dependencies
-    const messages: ModelMessage[] = [
-      { role: 'system', content: 'You are a coding agent. Inspect the workspace with tools, make bounded proposals, run checks, and report the result.' },
-      { role: 'user', content: input.prompt }
-    ]
     try {
+      const route = await this.dependencies.router?.route(input.prompt, active.controller.signal)
+      const model = route?.route === 'fast' && this.dependencies.fastModel ? this.dependencies.fastModel : deepModel
+      const attachedFiles: Array<{ path: string; content: string }> = []
+      for (const path of input.attachedFiles ?? []) {
+        try {
+          if (this.dependencies.loadAttachment) attachedFiles.push(await this.dependencies.loadAttachment(path))
+        } catch { /* an attachment can disappear between selection and send */ }
+      }
+      const messages: ModelMessage[] = (this.dependencies.contextBuilder ?? new ContextBuilder()).build({
+        systemPrompt: 'You are a coding agent. Inspect the workspace with tools, make bounded proposals, run checks, and report the result.',
+        attachedFiles,
+        userPrompt: input.prompt,
+        maxCharacters: 120_000
+      })
       await store.appendMessage(input.sessionId, { role: 'user', content: input.prompt })
       await store.createRun({ id: runId, sessionId: input.sessionId, status: 'queued' })
       await store.setRunStatus(runId, 'running')
@@ -71,7 +89,7 @@ export class AgentRunner {
         let assistantText = ''
         const toolCalls: Array<{ id: string; name: string; arguments: string }> = []
         for await (const event of provider.stream({
-          model: deepModel,
+          model,
           messages,
           tools: tools.definitionsForPhase('workspace')
         }, active.controller.signal)) {
@@ -102,7 +120,8 @@ export class AgentRunner {
             continue
           }
 
-          const policy = approvalPolicy.evaluate(call.name, parsed, input.permissionMode, tools.effect(call.name))
+          const effect = tools.effect(call.name)
+          const policy = approvalPolicy.evaluate(call.name, parsed, input.permissionMode, effect)
           if (policy.required) {
             const approvalId = randomUUID()
             await store.setRunStatus(runId, 'waiting_approval')
@@ -128,9 +147,13 @@ export class AgentRunner {
             const value = await tools.execute(call.name, parsed, { runId, signal: active.controller.signal })
             const result = { ok: true, value }
             messages.push(toolMessage(call, result))
-            if (isProposal(value)) await this.publish({
-              type: 'file.proposed', runId, timestamp: now(), proposalId: value.id, path: value.path, diff: value.diff
-            })
+            if (isProposal(value)) {
+              await this.publish({ type: 'file.proposed', runId, timestamp: now(), proposalId: value.id, path: value.path, diff: value.diff })
+              if (input.permissionMode === 'auto-workspace' && effect === 'write' && this.dependencies.applyProposal) {
+                await this.dependencies.applyProposal(value.id)
+                await this.publish({ type: 'file.applied', runId, timestamp: now(), proposalId: value.id, path: value.path })
+              }
+            }
             await this.publish({ type: 'tool.completed', runId, timestamp: now(), toolCallId: call.id, name: call.name, result })
           } catch (error) {
             if (active.controller.signal.aborted) throw abortError()

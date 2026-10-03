@@ -3,6 +3,8 @@ import { join } from 'node:path'
 
 import { ChangeService } from '../agent/changes/change-service'
 import { GroqProvider } from '../agent/providers/groq-provider'
+import { ContextBuilder } from '../agent/context/context-builder'
+import { TaskRouter } from '../agent/router/task-router'
 import { AgentRunner } from '../agent/runtime/agent-runner'
 import { ApprovalPolicy } from '../agent/runtime/approval-policy'
 import { ToolRegistry } from '../agent/tools/tool-registry'
@@ -63,13 +65,20 @@ app.whenReady().then(async () => {
   const changes = new ChangeService(requireWorkspace)
   const tools = new ToolRegistry()
   registerWorkspaceTools(tools, requireWorkspace, changes)
+  const provider = new GroqProvider()
+  const models = resolveModelSettings()
   const runner = new AgentRunner({
-    provider: new GroqProvider(),
+    provider,
     tools,
     store,
     eventBus,
     approvalPolicy: new ApprovalPolicy(),
-    deepModel: resolveModelSettings().deepModel
+    deepModel: models.deepModel,
+    fastModel: models.fastModel,
+    router: new TaskRouter(provider, models.fastModel),
+    contextBuilder: new ContextBuilder(),
+    loadAttachment: async (path) => ({ path, content: (await requireWorkspace().readText(path)).content }),
+    applyProposal: (proposalId) => changes.apply(proposalId)
   })
   registerSessionIpc(store, eventBus)
   registerSettingsIpc()

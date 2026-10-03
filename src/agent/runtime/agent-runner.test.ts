@@ -38,6 +38,22 @@ describe('AgentRunner', () => {
     expect(store.listSessions()[0].messages.map((message) => message.content)).toEqual(['Finish', 'Done'])
   })
 
+  test('routes the task and includes attached file content in the initial context', async () => {
+    const requests: ModelRequest[] = []
+    const provider = sequenceProvider([[{ type: 'text-delta', delta: 'Done' }, { type: 'completed' }]], requests)
+    const { runner, bus } = createRunner(provider, new ToolRegistry(), {
+      router: { route: async () => ({ route: 'fast' as const, reason: 'simple', requiredTools: [] }) },
+      fastModel: 'fast-model',
+      loadAttachment: async (path: string) => ({ path, content: 'export const active = true' })
+    })
+
+    const { runId } = runner.start({ sessionId, prompt: 'Explain this file', permissionMode: 'ask', attachedFiles: ['src/active.ts'] })
+    await waitForTerminal(bus, runId)
+
+    expect(requests[0].model).toBe('fast-model')
+    expect(requests[0].messages.some((message) => message.content.includes('File: src/active.ts') && message.content.includes('active = true'))).toBe(true)
+  })
+
   test('feeds a tool result into the next model iteration', async () => {
     const requests: ModelRequest[] = []
     const provider = sequenceProvider([
@@ -115,6 +131,23 @@ describe('AgentRunner', () => {
     expect(requests[1].messages.at(-1)?.content).toContain('USER_REJECTED')
   })
 
+  test('applies write proposals automatically in auto-workspace mode', async () => {
+    const applied: string[] = []
+    const tools = new ToolRegistry()
+    tools.register({ name: 'propose_file_change', description: 'Write', parameters: {}, schema: z.object({}), phase: 'workspace', effect: 'write' }, () => ({ id: 'proposal-1', path: 'a.ts', diff: '+new' }))
+    const provider = sequenceProvider([
+      [{ type: 'tool-call', id: 'call-1', name: 'propose_file_change', arguments: '{}' }, { type: 'completed' }],
+      [{ type: 'text-delta', delta: 'Applied' }, { type: 'completed' }]
+    ])
+    const { runner, bus } = createRunner(provider, tools, { applyProposal: async (id: string) => { applied.push(id) } })
+
+    const { runId } = runner.start({ sessionId, prompt: 'Change', permissionMode: 'auto-workspace' })
+    await waitForTerminal(bus, runId)
+
+    expect(applied).toEqual(['proposal-1'])
+    expect(bus.history(runId).map((event) => event.type)).toContain('file.applied')
+  })
+
   test('stops after twenty model iterations', async () => {
     const provider: ModelProvider = {
       async * stream(): AsyncIterable<ModelEvent> {
@@ -150,11 +183,11 @@ describe('AgentRunner', () => {
     expect(store.getRun(runId)?.status).toBe('cancelled')
   })
 
-  function createRunner(provider: ModelProvider, tools = new ToolRegistry()): { runner: AgentRunner; bus: RunEventBus } {
+  function createRunner(provider: ModelProvider, tools = new ToolRegistry(), extra: Record<string, unknown> = {}): { runner: AgentRunner; bus: RunEventBus } {
     const bus = new RunEventBus()
     return {
       bus,
-      runner: new AgentRunner({ provider, tools, store, eventBus: bus, approvalPolicy: new ApprovalPolicy(), deepModel: 'deep-model' })
+      runner: new AgentRunner({ provider, tools, store, eventBus: bus, approvalPolicy: new ApprovalPolicy(), deepModel: 'deep-model', ...extra })
     }
   }
 })
