@@ -24,7 +24,9 @@ describe('AgentPanel', () => {
     })
 
     expect(await screen.findByText('Working')).toBeInTheDocument()
-    expect(screen.getByText('read_file')).toBeInTheDocument()
+    expect(screen.getByText('Lendo arquivo…')).toBeInTheDocument()
+    fireEvent.click(screen.getByText('Lendo arquivo…'))
+    expect(screen.getByText('Leu arquivo')).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: /parar/i }))
     expect(harness.cancel).toHaveBeenCalledWith('run-1')
 
@@ -74,6 +76,59 @@ describe('AgentPanel', () => {
     fireEvent.click(await screen.findByRole('button', { name: /continuar de onde parou/i }))
 
     await waitFor(() => expect(harness.resume).toHaveBeenCalledWith('run-1'))
+  })
+
+  test('scrolls to the latest activity automatically', async () => {
+    const scrollIntoView = vi.fn()
+    Element.prototype.scrollIntoView = scrollIntoView
+    const harness = createHarness()
+    render(<AgentPanel desktop={harness.desktop} store={harness.store} />)
+    scrollIntoView.mockClear()
+
+    act(() => {
+      harness.emit(event({ type: 'assistant.delta', delta: 'Analisando o projeto' }))
+      harness.emit(event({ type: 'tool.requested', toolCallId: 'call-1', name: 'search_files', arguments: '{"query":"perfil"}' }))
+    })
+
+    await waitFor(() => expect(scrollIntoView).toHaveBeenCalled())
+  })
+
+  test('renders basic markdown instead of exposing formatting markers', () => {
+    const harness = createHarness()
+    harness.store.setState({ conversationMessages: [{
+      id: 'answer', role: 'assistant', content: 'A alteração **não** foi perdida e o arquivo `src/app.ts` foi preservado.',
+      createdAt: '2026-10-03T12:00:00.000Z'
+    }] })
+
+    render(<AgentPanel desktop={harness.desktop} store={harness.store} />)
+
+    expect(screen.getByText('não').tagName).toBe('STRONG')
+    expect(screen.getByText('src/app.ts').tagName).toBe('CODE')
+    expect(screen.queryByText(/\*\*não\*\*/)).not.toBeInTheDocument()
+  })
+
+  test('keeps pending actions from earlier runs visible after a new run starts', () => {
+    const harness = createHarness()
+    harness.store.setState({
+      activeRunId: 'run-new',
+      agentRuns: {
+        'run-old': {
+          id: 'run-old', status: 'completed', assistantText: '', resumable: false,
+          tools: [{ id: 'old-tool', name: 'propose_file_patch', status: 'completed' }], approvals: [],
+          proposals: [{ id: 'old-proposal', runId: 'run-old', kind: 'write', path: 'src/pendente.ts', diff: '+alteracao', status: 'pending' }]
+        },
+        'run-new': {
+          id: 'run-new', status: 'running', assistantText: '', resumable: false,
+          tools: [{ id: 'new-tool', name: 'read_file', status: 'running' }], approvals: [], proposals: []
+        }
+      }
+    })
+
+    render(<AgentPanel desktop={harness.desktop} store={harness.store} />)
+
+    expect(screen.getByText('src/pendente.ts')).toBeInTheDocument()
+    expect(screen.getByText('Execução concluída · 1 etapa')).toBeInTheDocument()
+    expect(screen.getByText('Lendo arquivo…')).toBeInTheDocument()
   })
 })
 

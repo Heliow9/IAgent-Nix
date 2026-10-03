@@ -38,6 +38,17 @@ describe('AgentRunner', () => {
     expect(store.listSessions()[0].messages.map((message) => message.content)).toEqual(['Finish', 'Done'])
   })
 
+  test('instructs the model to always answer in Brazilian Portuguese', async () => {
+    const requests: ModelRequest[] = []
+    const { runner, bus } = createRunner(sequenceProvider([[{ type: 'text-delta', delta: 'Concluído' }, { type: 'completed' }]], requests))
+
+    const { runId } = runner.start({ sessionId, prompt: 'Explain the change', permissionMode: 'ask' })
+    await waitForTerminal(bus, runId)
+
+    expect(requests[0].messages[0]).toMatchObject({ role: 'system' })
+    expect(requests[0].messages[0].content).toContain('Brazilian Portuguese')
+  })
+
   test('routes the task and includes attached file content in the initial context', async () => {
     const requests: ModelRequest[] = []
     const provider = sequenceProvider([[{ type: 'text-delta', delta: 'Done' }, { type: 'completed' }]], requests)
@@ -52,6 +63,41 @@ describe('AgentRunner', () => {
 
     expect(requests[0].model).toBe('fast-model')
     expect(requests[0].messages.some((message) => message.content.includes('File: src/active.ts') && message.content.includes('active = true'))).toBe(true)
+  })
+
+  test('includes recent conversation history so references remain understandable', async () => {
+    const requests: ModelRequest[] = []
+    const provider = sequenceProvider([
+      [{ type: 'text-delta', delta: 'Falamos sobre src/employee.ts' }, { type: 'completed' }],
+      [{ type: 'text-delta', delta: 'Vou abrir o arquivo' }, { type: 'completed' }]
+    ], requests)
+    const { runner, bus } = createRunner(provider)
+
+    const first = runner.start({ sessionId, prompt: 'Analise src/employee.ts', permissionMode: 'ask' })
+    await waitForTerminal(bus, first.runId)
+    const second = runner.start({ sessionId, prompt: 'Abra esse arquivo no editor', permissionMode: 'ask' })
+    await waitForTerminal(bus, second.runId)
+
+    expect(requests[1].messages).toEqual(expect.arrayContaining([
+      expect.objectContaining({ role: 'user', content: 'Analise src/employee.ts' }),
+      expect.objectContaining({ role: 'assistant', content: 'Falamos sobre src/employee.ts' })
+    ]))
+  })
+
+  test('emits an editor event instead of sending file content through the chat', async () => {
+    const tools = new ToolRegistry()
+    tools.register({ name: 'open_file_in_editor', description: 'Open', parameters: {}, schema: z.object({ path: z.string() }), phase: 'workspace', effect: 'read' },
+      ({ path }) => ({ action: 'open_file_in_editor', path }))
+    const provider = sequenceProvider([
+      [{ type: 'tool-call', id: 'open-1', name: 'open_file_in_editor', arguments: '{"path":"src/employee.ts"}' }, { type: 'completed' }],
+      [{ type: 'text-delta', delta: 'Arquivo aberto no editor.' }, { type: 'completed' }]
+    ])
+    const { runner, bus } = createRunner(provider, tools)
+
+    const { runId } = runner.start({ sessionId, prompt: 'Abra o arquivo no editor', permissionMode: 'ask' })
+    await waitForTerminal(bus, runId)
+
+    expect(bus.history(runId)).toContainEqual(expect.objectContaining({ type: 'editor.open.requested', path: 'src/employee.ts' }))
   })
 
   test('feeds a tool result into the next model iteration', async () => {
@@ -223,6 +269,21 @@ describe('AgentRunner', () => {
 
     expect(store.listSessions()[0].messages.map((message) => message.content)).toEqual(['Continue me', 'Recovered answer'])
     expect(store.getCheckpoint(runId)).toBeUndefined()
+  })
+
+  test('adds the Portuguese instruction when resuming a legacy checkpoint', async () => {
+    const requests: ModelRequest[] = []
+    await store.createRun({ id: 'legacy-run', sessionId, status: 'failed' })
+    await store.saveCheckpoint('legacy-run', {
+      sessionId, prompt: 'Continue', permissionMode: 'ask', model: 'model', safeToResume: true,
+      messages: [{ role: 'system', content: 'You are a coding agent.' }, { role: 'user', content: 'Continue' }]
+    })
+    const { runner, bus } = createRunner(sequenceProvider([[{ type: 'text-delta', delta: 'Continuando' }, { type: 'completed' }]], requests))
+
+    runner.resume('legacy-run')
+    await waitForTerminal(bus, 'legacy-run')
+
+    expect(requests[0].messages[0].content).toContain('Brazilian Portuguese')
   })
 
   test('refuses to resume from a checkpoint captured during an unsafe effect', async () => {

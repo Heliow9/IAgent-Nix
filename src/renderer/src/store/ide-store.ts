@@ -235,6 +235,10 @@ export function createIdeStore(options: StoreOptions = {}): IdeStore {
       if (runId) await desktop().agent.cancel(runId)
     },
     reduceAgentEvent(event) {
+      if (event.type === 'editor.open.requested') {
+        get().selectFile(event.path)
+        return
+      }
       set((state) => {
         const run = reduceRun(state.agentRuns[event.runId] ?? emptyAgentRun(event.runId), event)
         const alreadyHasAnswer = state.conversationMessages.some((message) => message.id === `${event.runId}-assistant`)
@@ -277,7 +281,7 @@ function reduceRun(current: AgentRunView, event: AgentEvent): AgentRunView {
   if (event.type === 'run.started' || event.type === 'run.resumed') { run.status = 'running'; run.resumable = false; run.error = undefined }
   else if (event.type === 'assistant.delta') run.assistantText += event.delta
   else if (event.type === 'assistant.completed') run.assistantText = event.content
-  else if (event.type === 'tool.requested') run.tools.push({ id: event.toolCallId, name: event.name, status: 'requested' })
+  else if (event.type === 'tool.requested') run.tools.push({ id: event.toolCallId, name: event.name, status: 'requested', arguments: event.arguments })
   else if (event.type === 'tool.started') run.tools = updateTool(run.tools, event.toolCallId, { status: 'running' })
   else if (event.type === 'tool.completed') run.tools = updateTool(run.tools, event.toolCallId, { status: 'completed', result: event.result })
   else if (event.type === 'approval.requested') { run.status = 'waiting_approval'; run.approvals.push({ id: event.approvalId, summary: event.summary, status: 'pending' }) }

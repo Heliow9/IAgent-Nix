@@ -69,6 +69,11 @@ export class SessionStore {
     return structuredClone(this.state.sessions).sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
   }
 
+  getSession(sessionId: string): SessionRecord | undefined {
+    const session = this.state.sessions.find((item) => item.id === sessionId)
+    return session ? structuredClone(session) : undefined
+  }
+
   async appendMessage(sessionId: string, input: Pick<ChatMessage, 'role' | 'content'>): Promise<ChatMessage> {
     const session = this.requireSession(sessionId)
     const message: ChatMessage = {

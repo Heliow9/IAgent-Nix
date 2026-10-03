@@ -85,7 +85,7 @@ export class AgentRunner {
       let messages: ModelMessage[]
       if (restored) {
         model = restored.model
-        messages = structuredClone(restored.messages)
+        messages = ensurePortugueseInstruction(structuredClone(restored.messages))
       } else {
         const route = await this.dependencies.router?.route(input.prompt, active.controller.signal)
         model = route?.route === 'fast' && this.dependencies.fastModel ? this.dependencies.fastModel : deepModel
@@ -95,8 +95,12 @@ export class AgentRunner {
             if (this.dependencies.loadAttachment) attachedFiles.push(await this.dependencies.loadAttachment(path))
           } catch { /* an attachment can disappear between selection and send */ }
         }
+        const history: ModelMessage[] = (store.getSession(input.sessionId)?.messages ?? [])
+          .filter((message) => message.role === 'user' || message.role === 'assistant')
+          .map((message) => ({ role: message.role, content: message.content }))
         messages = (this.dependencies.contextBuilder ?? new ContextBuilder()).build({
-          systemPrompt: 'You are a careful coding agent. Always read an existing file before editing it. For localized changes, use propose_file_patch with exact unique search/replace blocks so unrelated code is preserved. Use propose_file_change only for new files or when providing the complete replacement file. Never place unified-diff markers or patch protocol markers inside file content. Inspect the workspace, make bounded proposals, run relevant checks, and report the result.',
+          systemPrompt: 'You are a careful coding agent inside a visual IDE. Always answer the user in Brazilian Portuguese, including progress explanations, errors, and the final response. Resolve references such as "esse arquivo" from the recent conversation history. When the user asks to open or show a file in the editor, call open_file_in_editor and reply only with a short confirmation; never paste the file content into chat. Always read an existing file before editing it. For localized changes, use propose_file_patch with exact unique search/replace blocks so unrelated code is preserved. Use propose_file_change only for new files or when providing the complete replacement file. Never place unified-diff markers or patch protocol markers inside file content. Inspect the workspace, make bounded proposals, run relevant checks, and finish with a concise summary of what changed, which files were affected, and what validation was executed.',
+          history,
           attachedFiles,
           userPrompt: input.prompt,
           maxCharacters: 120_000
@@ -200,6 +204,9 @@ export class AgentRunner {
             const value = await tools.execute(call.name, parsed, { runId, signal: active.controller.signal })
             const result = { ok: true, value }
             messages.push(toolMessage(call, result))
+            if (isEditorOpenAction(value)) {
+              await this.publish({ type: 'editor.open.requested', runId, timestamp: now(), path: value.path })
+            }
             if (isProposal(value)) {
               await this.publish({ type: 'file.proposed', runId, timestamp: now(), proposalId: value.id, path: value.path, diff: value.diff })
               if (input.permissionMode === 'auto-workspace' && effect === 'write' && this.dependencies.applyProposal) {
@@ -278,4 +285,16 @@ function abortError(): Error {
 
 function isProposal(value: unknown): value is { id: string; path: string; diff: string } {
   return Boolean(value && typeof value === 'object' && 'id' in value && 'path' in value && 'diff' in value)
+}
+
+function isEditorOpenAction(value: unknown): value is { action: 'open_file_in_editor'; path: string } {
+  return Boolean(value && typeof value === 'object' && 'action' in value && value.action === 'open_file_in_editor' && 'path' in value && typeof value.path === 'string')
+}
+
+function ensurePortugueseInstruction(messages: ModelMessage[]): ModelMessage[] {
+  const instruction = 'Always answer the user in Brazilian Portuguese, including progress explanations, errors, and the final response.'
+  const system = messages.find((message) => message.role === 'system')
+  if (!system) return [{ role: 'system', content: instruction }, ...messages]
+  if (!system.content.includes('Brazilian Portuguese')) system.content = `${system.content} ${instruction}`
+  return messages
 }

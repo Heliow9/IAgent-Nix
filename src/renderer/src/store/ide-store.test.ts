@@ -90,6 +90,19 @@ describe('IDE store', () => {
     expect(resume).toHaveBeenCalledWith('run-1')
     expect(store.getState().agentRuns['run-1']).toMatchObject({ status: 'running', resumable: false, error: undefined })
   })
+
+  test('opens a file tab when the agent requests the editor', async () => {
+    const readText = vi.fn(async () => ({ content: 'export const value = 1', hash: 'hash', totalLines: 1 }))
+    const store = createIdeStore({ desktop: () => fakeDesktop({ readText }), storage: memoryStorage() })
+
+    store.getState().reduceAgentEvent({
+      type: 'editor.open.requested', runId: 'run-1', timestamp: '2026-10-03T12:00:00.000Z', path: 'src/employee.ts'
+    })
+    await vi.waitFor(() => expect(readText).toHaveBeenCalledWith('src/employee.ts'))
+
+    expect(store.getState().activePath).toBe('src/employee.ts')
+    expect(store.getState().openTabs).toContain('src/employee.ts')
+  })
 })
 
 function memoryStorage(): KeyValueStorage {

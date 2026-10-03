@@ -55,6 +55,10 @@ Execute `npm run build` antes do E2E. O smoke da Groq consome uma requisicao peq
 
 As conversas, atividades e propostas ficam salvas e reaparecem quando o mesmo workspace e aberto novamente. Se a Groq falhar, atingir um limite temporario ou a execucao chegar ao limite de iteracoes em um ponto seguro, use **Continuar de onde parou**: o agente retoma o contexto salvo sem duplicar a solicitacao original. Execucoes interrompidas no meio de uma ferramenta ou aprovacao nao sao retomadas automaticamente, evitando repetir efeitos colaterais.
 
+As atividades tecnicas ficam agrupadas em uma unica linha no chat. A linha mostra a acao atual durante o trabalho e, ao final, a quantidade de etapas e arquivos alterados. Clique em **Detalhes** para consultar ferramentas, alvos e resultados. O chat acompanha automaticamente a mensagem mais recente, interpreta formatacao basica em Markdown e orienta o agente a responder sempre em portugues do Brasil.
+
+O agente recebe o historico recente da conversa para compreender referencias como "esse arquivo" e "o que acabamos de discutir". Pedidos para abrir um arquivo usam uma acao dedicada que seleciona o arquivo no Monaco; o conteudo nao e despejado no chat e a resposta fica limitada a uma confirmacao curta.
+
 Ao editar arquivos existentes, o agente recebe uma ferramenta de substituicao localizada por trechos exatos. Ela preserva o restante do arquivo e rejeita buscas ausentes ou ambiguas. Substituicoes completas que incluam marcadores de patch ou removam uma parte anormalmente grande de um arquivo existente tambem sao bloqueadas antes de gerar uma proposta.
 
 Arquivos sensiveis como `.env`, chaves privadas e certificados nao podem ser lidos pelas ferramentas do workspace. Operacoes de arquivo validam os caminhos contra escapes e links simbolicos. Comandos e mudancas destrutivas continuam sujeitos a aprovacao.

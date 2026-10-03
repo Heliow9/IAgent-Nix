@@ -19,5 +19,6 @@ describe('workspace tool schemas', () => {
     const command = registry.definitionsForPhase('workspace').find((tool) => tool.function.name === 'run_command')!
     expect((command.function.parameters as { required: string[] }).required).toEqual(['program'])
     expect(registry.definitionsForPhase('workspace').map((tool) => tool.function.name)).toContain('propose_file_patch')
+    expect(registry.definitionsForPhase('workspace').map((tool) => tool.function.name)).toContain('open_file_in_editor')
   })
 })

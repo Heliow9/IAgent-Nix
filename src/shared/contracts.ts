@@ -38,6 +38,7 @@ export const agentEventSchema = z.discriminatedUnion('type', [
   z.object({ ...eventBase, type: z.literal('approval.resolved'), approvalId: z.string(), decision: z.enum(['approved', 'rejected']) }),
   z.object({ ...eventBase, type: z.literal('file.proposed'), proposalId: z.string(), path: z.string(), diff: z.string() }),
   z.object({ ...eventBase, type: z.literal('file.applied'), proposalId: z.string(), path: z.string() }),
+  z.object({ ...eventBase, type: z.literal('editor.open.requested'), path: z.string().min(1) }),
   z.object({ ...eventBase, type: z.literal('run.failed'), message: z.string(), resumable: z.boolean().default(false) }),
   z.object({ ...eventBase, type: z.literal('run.cancelled') }),
   z.object({ ...eventBase, type: z.literal('run.completed') })

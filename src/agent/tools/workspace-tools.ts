@@ -24,6 +24,11 @@ export function registerWorkspaceTools(
   })
   registry.register(definition('read_file', 'Read a text file', z.object({ path: z.string().min(1), startLine: z.number().int().positive().optional(), endLine: z.number().int().positive().optional() }), 'read'),
     ({ path, startLine, endLine }) => getWorkspace().readText(path, { startLine, endLine }))
+  registry.register(definition('open_file_in_editor', 'Open an existing workspace file in the visual code editor. Use this when the user asks to open, show, or navigate to a file in the editor. Do not use read_file as a substitute and do not paste the file content into chat.', z.object({ path: z.string().min(1) }), 'read'),
+    async ({ path }) => {
+      await getWorkspace().readText(path, { startLine: 1, endLine: 1 })
+      return { action: 'open_file_in_editor' as const, path }
+    })
   registry.register(definition('propose_file_change', 'Create a new file or replace an existing file with its COMPLETE content. Never send a diff or partial file; use propose_file_patch for localized edits.', z.object({ path: z.string().min(1), content: z.string() }), 'write'),
     ({ path, content }, context) => changes.propose({ kind: 'write', path, content, runId: context.runId }))
   registry.register(definition('propose_file_patch', 'Safely edit an existing file by exact, unique search/replace blocks while preserving all unrelated content.', z.object({
