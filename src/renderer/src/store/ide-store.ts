@@ -252,12 +252,22 @@ export function createIdeStore(options: StoreOptions = {}): IdeStore {
       await desktop().agent.resolveApproval(runId, approvalId, decision)
     },
     async applyProposal(proposalId) {
-      const updated = await desktop().agent.applyProposal(proposalId)
-      set((state) => ({ agentRuns: mapProposal(state.agentRuns, proposalId, updated) }))
+      try {
+        const updated = await desktop().agent.applyProposal(proposalId)
+        set((state) => ({ agentRuns: mapProposal(state.agentRuns, proposalId, updated) }))
+      } catch (error) {
+        await refreshProposalsAfterFailure(desktop(), set)
+        throw error
+      }
     },
     async rejectProposal(proposalId) {
-      const updated = await desktop().agent.rejectProposal(proposalId)
-      set((state) => ({ agentRuns: mapProposal(state.agentRuns, proposalId, updated) }))
+      try {
+        const updated = await desktop().agent.rejectProposal(proposalId)
+        set((state) => ({ agentRuns: mapProposal(state.agentRuns, proposalId, updated) }))
+      } catch (error) {
+        await refreshProposalsAfterFailure(desktop(), set)
+        throw error
+      }
     },
     setPermissionMode(permissionMode) { set({ permissionMode }) },
     selectActivity(selectedActivity) {
@@ -303,16 +313,29 @@ async function hydrateConversation(desktop: DesktopAPI, sessionId: string): Prom
     for (const event of events[index]) view = reduceRun(view, event)
     view.status = summary.status
     view.resumable = summary.resumable
-    view.proposals = mergeProposals(view.proposals, proposals.filter((proposal) => proposal.runId === summary.id))
+    view.proposals = proposals.filter((proposal) => proposal.runId === summary.id)
     agentRuns[summary.id] = view
   })
   return { activeRunId: summaries.at(-1)?.id, agentRuns }
 }
 
-function mergeProposals(fromEvents: FileProposal[], persisted: FileProposal[]): FileProposal[] {
-  const values = new Map(fromEvents.map((proposal) => [proposal.id, proposal]))
-  for (const proposal of persisted) values.set(proposal.id, proposal)
-  return [...values.values()]
+async function refreshProposalsAfterFailure(
+  desktop: DesktopAPI,
+  set: (partial: Partial<IdeState> | ((state: IdeState) => Partial<IdeState>)) => void
+): Promise<void> {
+  try {
+    const proposals = await desktop.agent.listProposals()
+    set((state) => ({ agentRuns: reconcileProposals(state.agentRuns, proposals) }))
+  } catch {
+    // Preserve the original apply/reject error when the recovery request also fails.
+  }
+}
+
+function reconcileProposals(runs: Record<string, AgentRunView>, proposals: FileProposal[]): Record<string, AgentRunView> {
+  return Object.fromEntries(Object.entries(runs).map(([id, run]) => [id, {
+    ...run,
+    proposals: proposals.filter((proposal) => proposal.runId === id)
+  }]))
 }
 
 function sameWorkspace(left: string, right: string): boolean {

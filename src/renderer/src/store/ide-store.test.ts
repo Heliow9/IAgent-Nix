@@ -71,6 +71,70 @@ describe('IDE store', () => {
     expect(store.getState().agentRuns['run-1'].proposals[0].id).toBe('proposal-1')
   })
 
+  test('ignores orphan proposal events when reopening a workspace', async () => {
+    const session: SessionRecord = {
+      id: 'session-1', title: 'Project', workspaceRoot: 'C:/project', permissionMode: 'ask', messages: [],
+      createdAt: '2026-10-03T12:00:00.000Z', updatedAt: '2026-10-03T12:00:01.000Z'
+    }
+    const desktop = fakeDesktop({ open: async () => ({ root: 'C:/project' }) }, {
+      sessions: {
+        list: async () => [session],
+        listRuns: async () => [{ id: 'run-1', sessionId: session.id, status: 'completed', resumable: false, createdAt: session.createdAt, updatedAt: session.updatedAt }],
+        events: async () => [
+          { type: 'file.proposed', runId: 'run-1', timestamp: session.updatedAt, proposalId: 'orphan-proposal', path: 'src/a.ts', diff: '+value' }
+        ]
+      },
+      agent: { listProposals: async () => [] }
+    })
+    const store = createIdeStore({ desktop: () => desktop, storage: memoryStorage() })
+
+    await store.getState().openWorkspace('C:/project')
+
+    expect(store.getState().agentRuns['run-1'].proposals).toEqual([])
+  })
+
+  test('removes a proposal that expired before rejection', async () => {
+    const rejectProposal = vi.fn(async () => { throw new Error('Unknown proposal: stale-proposal') })
+    const store = createIdeStore({
+      desktop: () => fakeDesktop({}, { agent: { rejectProposal, listProposals: async () => [] } }),
+      storage: memoryStorage()
+    })
+    store.setState({
+      agentRuns: {
+        'run-1': {
+          id: 'run-1', status: 'completed', assistantText: '', tools: [], approvals: [], resumable: false,
+          proposals: [{ id: 'stale-proposal', runId: 'run-1', kind: 'write', path: 'src/a.ts', diff: '+value', status: 'pending' }]
+        }
+      }
+    })
+
+    await expect(store.getState().rejectProposal('stale-proposal')).rejects.toThrow('Unknown proposal')
+
+    expect(rejectProposal).toHaveBeenCalledWith('stale-proposal')
+    expect(store.getState().agentRuns['run-1'].proposals).toEqual([])
+  })
+
+  test('removes a proposal that expired before application', async () => {
+    const applyProposal = vi.fn(async () => { throw new Error('Unknown proposal: stale-proposal') })
+    const store = createIdeStore({
+      desktop: () => fakeDesktop({}, { agent: { applyProposal, listProposals: async () => [] } }),
+      storage: memoryStorage()
+    })
+    store.setState({
+      agentRuns: {
+        'run-1': {
+          id: 'run-1', status: 'completed', assistantText: '', tools: [], approvals: [], resumable: false,
+          proposals: [{ id: 'stale-proposal', runId: 'run-1', kind: 'write', path: 'src/a.ts', diff: '+value', status: 'pending' }]
+        }
+      }
+    })
+
+    await expect(store.getState().applyProposal('stale-proposal')).rejects.toThrow('Unknown proposal')
+
+    expect(applyProposal).toHaveBeenCalledWith('stale-proposal')
+    expect(store.getState().agentRuns['run-1'].proposals).toEqual([])
+  })
+
   test('keeps a completed live answer in the visible conversation', () => {
     const store = createIdeStore({ desktop: () => fakeDesktop(), storage: memoryStorage() })
     store.getState().reduceAgentEvent({ type: 'assistant.completed', runId: 'run-1', timestamp: '2026-10-03T12:00:00.000Z', content: 'Concluído' })
