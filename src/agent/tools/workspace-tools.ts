@@ -12,8 +12,16 @@ export function registerWorkspaceTools(
 ): void {
   registry.register(definition('list_files', 'List files in the workspace', z.object({ path: z.string().default('') }), 'read'),
     ({ path }) => getWorkspace().list(path))
-  registry.register(definition('search_files', 'Search text in workspace files', z.object({ query: z.string().min(1), maxResults: z.number().int().positive().max(500).default(100) }), 'read'),
-    ({ query, maxResults }) => getWorkspace().search(query, { maxResults }))
+  registry.register(definition('search_files', 'Search text in workspace files. Use query for the text and optional path to limit results to a folder.', z.object({
+    query: z.string().min(1),
+    path: z.string().optional(),
+    maxResults: z.number().int().positive().max(500).default(100)
+  }), 'read'), async ({ query, path, maxResults }) => {
+    const matches = await getWorkspace().search(query, { maxResults: path ? 500 : maxResults })
+    if (!path || path === '.') return matches.slice(0, maxResults)
+    const prefix = path.replaceAll('\\', '/').replace(/^\.\//, '').replace(/\/$/, '')
+    return matches.filter((match) => match.path === prefix || match.path.startsWith(`${prefix}/`)).slice(0, maxResults)
+  })
   registry.register(definition('read_file', 'Read a text file', z.object({ path: z.string().min(1), startLine: z.number().int().positive().optional(), endLine: z.number().int().positive().optional() }), 'read'),
     ({ path, startLine, endLine }) => getWorkspace().readText(path, { startLine, endLine }))
   registry.register(definition('propose_file_change', 'Propose creating or replacing a file', z.object({ path: z.string().min(1), content: z.string() }), 'write'),
@@ -32,5 +40,7 @@ export function registerWorkspaceTools(
 }
 
 function definition<T>(name: string, description: string, schema: z.ZodType<T>, effect: 'read' | 'write' | 'delete' | 'command') {
-  return { name, description, schema, effect, phase: 'workspace' as const, parameters: z.toJSONSchema(schema) as Record<string, unknown> }
+  const parameters = z.toJSONSchema(schema, { io: 'input' }) as Record<string, unknown>
+  if (parameters.type === 'object') parameters.additionalProperties = false
+  return { name, description, schema, effect, phase: 'workspace' as const, parameters }
 }

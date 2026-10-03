@@ -72,6 +72,23 @@ describe('AgentRunner', () => {
     expect(store.getRun(runId)?.status).toBe('completed')
   })
 
+  test('does not execute the same tool call indefinitely and asks the model to change course', async () => {
+    let executions = 0
+    const requests: ModelRequest[] = []
+    const repeated = () => [{ type: 'tool-call' as const, id: crypto.randomUUID(), name: 'read_value', arguments: '{}' }, { type: 'completed' as const }]
+    const provider = sequenceProvider([repeated(), repeated(), repeated(), [{ type: 'text-delta', delta: 'Stopped looping' }, { type: 'completed' }]], requests)
+    const tools = new ToolRegistry()
+    tools.register({ name: 'read_value', description: 'Read', parameters: {}, schema: z.object({}), phase: 'workspace', effect: 'read' }, () => { executions += 1; return { value: 1 } })
+    const { runner, bus } = createRunner(provider, tools)
+
+    const { runId } = runner.start({ sessionId, prompt: 'Read once', permissionMode: 'ask' })
+    await waitForTerminal(bus, runId)
+
+    expect(executions).toBe(2)
+    expect(requests[3].messages.some((message) => message.content.includes('REPEATED_TOOL_CALL'))).toBe(true)
+    expect(store.getRun(runId)?.status).toBe('completed')
+  })
+
   test.each([
     ['unknown_tool', '{"value":1}', 'UNKNOWN_TOOL'],
     ['echo_value', '{bad-json', 'INVALID_ARGUMENTS']
@@ -149,14 +166,15 @@ describe('AgentRunner', () => {
   })
 
   test('stops after twenty model iterations', async () => {
+    let callNumber = 0
     const provider: ModelProvider = {
       async * stream(): AsyncIterable<ModelEvent> {
-        yield { type: 'tool-call', id: crypto.randomUUID(), name: 'read_value', arguments: '{}' }
+        yield { type: 'tool-call', id: crypto.randomUUID(), name: 'read_value', arguments: JSON.stringify({ callNumber: callNumber++ }) }
         yield { type: 'completed' }
       }
     }
     const tools = new ToolRegistry()
-    tools.register({ name: 'read_value', description: 'Read', parameters: {}, schema: z.object({}), phase: 'workspace', effect: 'read' }, () => ({ ok: true }))
+    tools.register({ name: 'read_value', description: 'Read', parameters: {}, schema: z.object({ callNumber: z.number() }), phase: 'workspace', effect: 'read' }, () => ({ ok: true }))
     const { runner, bus } = createRunner(provider, tools)
 
     const { runId } = runner.start({ sessionId, prompt: 'Loop', permissionMode: 'ask' })

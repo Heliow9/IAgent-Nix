@@ -80,6 +80,7 @@ export class AgentRunner {
         userPrompt: input.prompt,
         maxCharacters: 120_000
       })
+      const toolCallCounts = new Map<string, number>()
       await store.appendMessage(input.sessionId, { role: 'user', content: input.prompt })
       await store.createRun({ id: runId, sessionId: input.sessionId, status: 'queued' })
       await store.setRunStatus(runId, 'running')
@@ -110,6 +111,22 @@ export class AgentRunner {
         messages.push({ role: 'assistant', content: assistantText, toolCalls })
         for (const call of toolCalls) {
           await this.publish({ type: 'tool.requested', runId, timestamp: now(), toolCallId: call.id, name: call.name, arguments: call.arguments })
+          const signature = `${call.name}\u0000${call.arguments}`
+          const repeatedCount = (toolCallCounts.get(signature) ?? 0) + 1
+          toolCallCounts.set(signature, repeatedCount)
+          if (repeatedCount > 2) {
+            if (repeatedCount > 4) throw new Error(`Agent repeatedly called ${call.name} with the same arguments`)
+            const result = {
+              ok: false,
+              error: {
+                code: 'REPEATED_TOOL_CALL',
+                message: `Do not call ${call.name} again with identical arguments. Use the existing result, change the arguments, or provide a final answer.`
+              }
+            }
+            messages.push(toolMessage(call, result))
+            await this.publish({ type: 'tool.completed', runId, timestamp: now(), toolCallId: call.id, name: call.name, result })
+            continue
+          }
           let parsed: unknown
           try {
             parsed = tools.parse(call.name, call.arguments)
