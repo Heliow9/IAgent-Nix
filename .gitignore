@@ -1,0 +1,14 @@
+node_modules/
+.env
+.env.*
+!.env.example
+dist/
+out/
+coverage/
+.vite/
+.superpowers/
+.ai-agent-orchestrator/
+playwright-report/
+test-results/
+ai-agent-orchestrator.zip
+
