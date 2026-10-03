@@ -1,6 +1,8 @@
 import { app, BrowserWindow, shell } from 'electron'
 import { join } from 'node:path'
 
+import { registerWorkspaceIpc } from './ipc/workspace-ipc'
+
 function createWindow(): BrowserWindow {
   const window = new BrowserWindow({
     width: 1440,
@@ -33,6 +35,7 @@ function createWindow(): BrowserWindow {
 }
 
 app.whenReady().then(() => {
+  registerWorkspaceIpc()
   createWindow()
 
   app.on('activate', () => {

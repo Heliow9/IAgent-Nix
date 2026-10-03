@@ -67,4 +67,12 @@ export interface DesktopAPI {
     platform: NodeJS.Platform
     electronVersion: string
   }
+  workspace: {
+    open(root: string): Promise<{ root: string }>
+    createFolder(path: string): Promise<void>
+    list(path?: string): Promise<WorkspaceEntry[]>
+    readText(path: string, range?: { startLine?: number; endLine?: number }): Promise<{ content: string; hash: string; totalLines: number }>
+    saveText(path: string, content: string, expectedHash?: string): Promise<{ hash: string }>
+    search(query: string, maxResults?: number): Promise<Array<{ path: string; line: number; column: number; preview: string }>>
+  }
 }
