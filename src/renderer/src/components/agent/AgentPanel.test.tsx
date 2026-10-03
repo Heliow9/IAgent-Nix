@@ -61,6 +61,7 @@ function createHarness() {
     workspace: { open: async (root: string) => ({ root }), createFolder: async () => undefined, list: async () => [], readText: async () => ({ content: '', hash: '', totalLines: 0 }), saveText: async () => ({ hash: '' }), search: async () => [] },
     sessions: { list: async () => [session], create: async () => session, appendMessage: async () => { throw new Error('unused') }, onAgentEvent: (next: (event: AgentEvent) => void) => { listener = next; return unsubscribe } },
     settings: { models: async () => ({ fastModel: 'fast', deepModel: 'deep' }) },
+    projects: { preview: async () => { throw new Error('unused') }, create: async () => { throw new Error('unused') } },
     agent: { start, cancel, resolveApproval, listProposals: async () => [], applyProposal: async () => { throw new Error('unused') }, rejectProposal: async () => { throw new Error('unused') } },
     terminal: { create: async () => ({ id: 'terminal' }), write: async () => undefined, resize: async () => undefined, dispose: async () => undefined, onData: () => () => undefined, onExit: () => () => undefined }
   } as DesktopAPI

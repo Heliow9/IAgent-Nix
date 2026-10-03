@@ -5,6 +5,7 @@ export default defineConfig({
     globals: true,
     restoreMocks: true,
     clearMocks: true,
+    include: ['src/**/*.test.{ts,tsx}', 'tests/integration/**/*.test.ts'],
     coverage: {
       reporter: ['text', 'html']
     }

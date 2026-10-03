@@ -58,6 +58,7 @@ function fakeDesktop(workspace: Partial<DesktopAPI['workspace']> = {}): DesktopA
     },
     sessions: { list: async () => [], create: async () => { throw new Error('unused') }, appendMessage: async () => { throw new Error('unused') }, onAgentEvent: () => () => undefined },
     settings: { models: async () => ({ fastModel: 'fast', deepModel: 'deep' }) },
+    projects: { preview: async () => { throw new Error('unused') }, create: async () => { throw new Error('unused') } },
     agent: { start: async () => ({ runId: 'run' }), cancel: async () => undefined, resolveApproval: async () => undefined, listProposals: async () => [], applyProposal: async () => { throw new Error('unused') }, rejectProposal: async () => { throw new Error('unused') } },
     terminal: fakeTerminal()
   }

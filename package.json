@@ -11,12 +11,14 @@
     "preview": "electron-vite preview",
     "test": "vitest",
     "typecheck": "tsc --noEmit",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "smoke:groq": "node scripts/smoke-groq.mjs"
   },
   "dependencies": {
     "@monaco-editor/react": "^4.7.0",
     "@xterm/addon-fit": "^0.11.0",
     "@xterm/xterm": "^6.0.0",
+    "dotenv": "^18.0.5",
     "groq-sdk": "^1.6.0",
     "mermaid": "^12.1.0",
     "monaco-editor": "^0.57.0",
@@ -27,6 +29,7 @@
     "zustand": "^5.0.15"
   },
   "devDependencies": {
+    "@playwright/test": "^1.63.0",
     "@testing-library/jest-dom": "^6.9.1",
     "@testing-library/react": "^16.3.0",
     "@types/node": "^24.7.0",

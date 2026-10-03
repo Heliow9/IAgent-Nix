@@ -76,6 +76,21 @@ export interface ModelSettings {
   deepModel: string
 }
 
+export const projectTemplateSchema = z.enum(['empty', 'node-typescript', 'react-typescript'])
+export const projectTemplateInputSchema = z.object({
+  name: z.string().min(1),
+  location: z.string().min(1),
+  template: projectTemplateSchema
+})
+export type ProjectTemplateInput = z.infer<typeof projectTemplateInputSchema>
+export interface ProjectPreview {
+  projectName: string
+  targetPath: string
+  template: z.infer<typeof projectTemplateSchema>
+  files: string[]
+  confirmationToken: string
+}
+
 export interface FileProposal {
   id: string
   runId?: string
@@ -127,6 +142,10 @@ export interface DesktopAPI {
   }
   settings: {
     models(): Promise<ModelSettings>
+  }
+  projects: {
+    preview(input: ProjectTemplateInput): Promise<ProjectPreview>
+    create(input: ProjectTemplateInput, confirmationToken: string): Promise<ProjectPreview>
   }
   agent: {
     start(input: z.input<typeof startAgentRunRequestSchema>): Promise<{ runId: string }>

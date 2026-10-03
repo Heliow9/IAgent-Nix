@@ -31,6 +31,10 @@ const desktop: DesktopAPI = {
   settings: {
     models: () => ipcRenderer.invoke('settings:models')
   },
+  projects: {
+    preview: (input) => ipcRenderer.invoke('projects:preview', input),
+    create: (input, confirmationToken) => ipcRenderer.invoke('projects:create', { input, confirmationToken })
+  },
   agent: {
     start: (input) => ipcRenderer.invoke('agent:start', input),
     cancel: (runId) => ipcRenderer.invoke('agent:cancel', { runId }),

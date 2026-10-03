@@ -21,7 +21,16 @@ export function IdeShell(): React.JSX.Element {
   const setSize = useIdeStore((state) => state.setPanelSize)
   const [createOpen, setCreateOpen] = useState(false)
 
-  if (!workspaceRoot) return <><Welcome loading={loading} error={error} onOpen={openWorkspace} onCreate={() => setCreateOpen(true)} /><CreateProjectDialog open={createOpen} onClose={() => setCreateOpen(false)} onCreate={() => setCreateOpen(false)} /></>
+  if (!workspaceRoot) return <><Welcome loading={loading} error={error} onOpen={openWorkspace} onCreate={() => setCreateOpen(true)} /><CreateProjectDialog
+    open={createOpen}
+    onClose={() => setCreateOpen(false)}
+    onPreview={(draft) => window.desktop.projects.preview(draft)}
+    onConfirm={async (draft, token) => {
+      const project = await window.desktop.projects.create(draft, token)
+      setCreateOpen(false)
+      await openWorkspace(project.targetPath)
+    }}
+  /></>
 
   return (
     <div className="ide-shell">
