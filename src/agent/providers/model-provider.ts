@@ -1,4 +1,6 @@
 export type ModelRole = 'system' | 'user' | 'assistant' | 'tool'
+export type ReasoningEffort = 'low' | 'medium' | 'high'
+export type ModelToolChoice = 'auto' | 'required' | 'none' | { type: 'function'; function: { name: string } }
 
 export interface ModelMessage {
   role: ModelRole
@@ -21,8 +23,12 @@ export interface ModelRequest {
   model: string
   messages: ModelMessage[]
   tools?: ModelToolDefinition[]
+  toolChoice?: ModelToolChoice
   temperature?: number
   responseFormat?: 'json_object'
+  reasoningEffort?: ReasoningEffort
+  maxCompletionTokens?: number
+  requestClass?: 'agent' | 'router' | 'title' | 'subagent'
 }
 
 export type ModelEvent =

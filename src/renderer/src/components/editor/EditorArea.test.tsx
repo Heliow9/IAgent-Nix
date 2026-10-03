@@ -9,8 +9,8 @@ import { createIdeStore } from '../../store/ide-store'
 import { EditorArea } from './EditorArea'
 
 vi.mock('@monaco-editor/react', () => ({
-  default: ({ value, language, onChange }: { value: string; language: string; onChange(value: string): void }) => (
-    <textarea aria-label="Editor de codigo" data-language={language} value={value} onChange={(event) => onChange(event.target.value)} />
+  default: ({ value, language, onChange, options }: { value: string; language: string; onChange(value: string): void; options?: { readOnly?: boolean } }) => (
+    <textarea aria-label="Editor de codigo" data-language={language} value={value} disabled={options?.readOnly} onChange={(event) => onChange(event.target.value)} />
   )
 }))
 
@@ -81,20 +81,36 @@ describe('EditorArea', () => {
     await store.getState().closeFile('src/app.ts', 'discard')
     expect(store.getState().openTabs).not.toContain('src/app.ts')
   })
+
+  test('shows the agent live preview without replacing the real buffer', async () => {
+    const store = createIdeStore({ desktop: () => desktop() })
+    await store.getState().openFile('src/app.ts')
+    store.setState((state) => ({ buffers: { ...state.buffers, 'src/app.ts': {
+      ...state.buffers['src/app.ts'], agentPreviewContent: 'export const value = 2\n',
+      agentPreviewProposalId: 'proposal-1', agentPreviewing: true
+    } } }))
+
+    render(<EditorArea store={store} />)
+
+    expect(screen.getByText(/nix está editando/i)).toBeInTheDocument()
+    expect(screen.getByRole('textbox', { name: /editor de codigo/i })).toHaveValue('export const value = 2\n')
+    expect(screen.getByRole('textbox', { name: /editor de codigo/i })).toBeDisabled()
+    expect(store.getState().buffers['src/app.ts'].content).toBe('export const value = 1\n')
+  })
 })
 
 function desktop(workspace: Partial<DesktopAPI['workspace']> = {}): DesktopAPI {
   return {
     app: { platform: 'win32', electronVersion: '38' },
     workspace: {
-      open: async (root) => ({ root }), createFolder: async () => undefined, list: async () => [],
+      open: async (root: string) => ({ root }), createFolder: async () => undefined, list: async () => [],
       readText: async () => ({ content: 'export const value = 1\n', hash: 'hash-1', totalLines: 2 }),
-      saveText: async () => ({ hash: 'hash-2' }), search: async () => [], ...workspace
+      saveText: async () => ({ hash: 'hash-2' }), search: async () => [], resolveImport: async () => ({ kind: 'unresolved' }), ...workspace
     },
     sessions: { list: async () => [], create: async () => { throw new Error('unused') }, appendMessage: async () => { throw new Error('unused') }, listRuns: async () => [], events: async () => [], onAgentEvent: () => () => undefined },
     settings: { models: async () => ({ fastModel: 'fast', deepModel: 'deep' }) },
     projects: { preview: async () => { throw new Error('unused') }, create: async () => { throw new Error('unused') } },
-    agent: { start: async () => ({ runId: 'run' }), resume: async (runId) => ({ runId }), cancel: async () => undefined, resolveApproval: async () => undefined, listProposals: async () => [], applyProposal: async () => { throw new Error('unused') }, rejectProposal: async () => { throw new Error('unused') } },
+    agent: { start: async () => ({ runId: 'run' }), resume: async (runId: string) => ({ runId }), cancel: async () => undefined, resolveApproval: async () => undefined, resolveAllApprovals: async () => undefined, listProposals: async () => [], applyProposal: async () => { throw new Error('unused') }, rejectProposal: async () => { throw new Error('unused') } },
     terminal: { create: async () => ({ id: 'terminal' }), write: async () => undefined, resize: async () => undefined, dispose: async () => undefined, onData: () => () => undefined, onExit: () => () => undefined }
-  }
+  } as unknown as DesktopAPI
 }

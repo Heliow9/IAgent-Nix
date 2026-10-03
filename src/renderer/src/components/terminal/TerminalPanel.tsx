@@ -18,17 +18,36 @@ export function TerminalPanel({ workspaceRoot }: { workspaceRoot: string }): Rea
     terminal.loadAddon(fit)
     terminal.open(container.current)
     fit.fit()
+    terminal.focus()
     let terminalId: string | undefined
     const pendingInput: string[] = []
+    let writeQueue = Promise.resolve()
     let removeData: (() => void) | undefined
     let removeExit: (() => void) | undefined
-    const input = terminal.onData((data) => {
-      if (terminalId) void window.desktop.terminal.write(terminalId, data)
-      else pendingInput.push(data)
+    const sendInput = (data: string): void => {
+      if (!terminalId) {
+        pendingInput.push(data)
+        return
+      }
+      const id = terminalId
+      writeQueue = writeQueue
+        .then(() => window.desktop.terminal.write(id, data))
+        .catch((error: unknown) => { terminal.write(`\r\n[terminal input error] ${error instanceof Error ? error.message : 'unknown error'}\r\n`) })
+    }
+    const input = terminal.onData(sendInput)
+    terminal.attachCustomKeyEventHandler((event) => {
+      if (event.type === 'keydown' && (event.code === 'Space' || event.key === ' ') && !event.ctrlKey && !event.metaKey && !event.altKey) {
+        // Some Electron/xterm combinations can let the browser consume a plain
+        // space before onData fires. Forward it explicitly and stop xterm from
+        // emitting a duplicate character.
+        sendInput(' ')
+        return false
+      }
+      return true
     })
     void window.desktop.terminal.create({ cwd: workspaceRoot, cols: terminal.cols, rows: terminal.rows }).then(({ id }) => {
       terminalId = id
-      for (const data of pendingInput.splice(0)) void window.desktop.terminal.write(id, data)
+      for (const data of pendingInput.splice(0)) sendInput(data)
       removeData = window.desktop.terminal.onData(id, (data) => terminal.write(data))
       removeExit = window.desktop.terminal.onExit(id, (code) => terminal.write(`\r\n[process exited ${code}]\r\n`))
     }).catch((error: unknown) => terminal.write(`\r\n[terminal error] ${error instanceof Error ? error.message : 'unknown error'}\r\n`))

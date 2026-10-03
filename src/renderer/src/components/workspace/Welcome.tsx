@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import type { WorkspaceRecord } from '../../../../shared/contracts'
+import nixLogo from '../../assets/nix-logo.png'
 
 export function Welcome({ loading, error, onOpen, onCreate, recentWorkspaces, allWorkspaces }: {
   loading: boolean
@@ -16,7 +17,7 @@ export function Welcome({ loading, error, onOpen, onCreate, recentWorkspaces, al
   return (
     <main className="welcome-view">
       <section className="welcome-copy">
-        <span className="eyebrow">GROQ STUDIO · LOCAL FIRST</span>
+        <div className="welcome-brand"><img src={nixLogo} alt="NIX" /><span className="eyebrow">NIX · GROQ ENGINE · LOCAL FIRST</span></div>
         <h1>Construa software em conversa com seu projeto.</h1>
         <p>Abra uma pasta para editar codigo, desenhar arquiteturas e executar um agente Groq com revisao de cada mudanca.</p>
         <div className="open-row">

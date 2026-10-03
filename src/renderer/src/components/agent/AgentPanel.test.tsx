@@ -37,14 +37,46 @@ describe('AgentPanel', () => {
   test('keeps approval blocking until accepted or rejected', async () => {
     const harness = createHarness()
     render(<AgentPanel desktop={harness.desktop} store={harness.store} />)
-    fireEvent.change(screen.getByRole('textbox'), { target: { value: 'Change file' } })
+    fireEvent.change(screen.getByRole('textbox', { name: /mensagem para o agente/i }), { target: { value: 'Change file' } })
     fireEvent.click(screen.getByRole('button', { name: /enviar/i }))
     await waitFor(() => expect(harness.start).toHaveBeenCalled())
     act(() => { harness.emit(event({ type: 'approval.requested', approvalId: 'approval-1', summary: 'Alterar src/app.ts' })) })
 
     expect(await screen.findByRole('alertdialog')).toHaveTextContent('Alterar src/app.ts')
-    fireEvent.click(screen.getByRole('button', { name: /aprovar/i }))
+    fireEvent.click(screen.getByRole('button', { name: /^aprovar$/i }))
     expect(harness.resolveApproval).toHaveBeenCalledWith('run-1', 'approval-1', 'approved')
+  })
+
+  test('can approve every remaining permission question in the current run', async () => {
+    const harness = createHarness()
+    render(<AgentPanel desktop={harness.desktop} store={harness.store} />)
+    act(() => { harness.emit(event({ type: 'approval.requested', approvalId: 'approval-1', summary: 'Alterar src/app.ts' })) })
+
+    fireEvent.click(await screen.findByRole('button', { name: /^aprovar todas$/i }))
+
+    expect(harness.resolveAllApprovals).toHaveBeenCalledWith('run-1', 'approved')
+  })
+
+  test('can apply all pending file proposals in proposal order', async () => {
+    const harness = createHarness()
+    harness.store.setState({
+      activeRunId: 'run-1',
+      agentRuns: {
+        'run-1': {
+          id: 'run-1', status: 'completed', assistantText: '', resumable: false, tools: [], approvals: [],
+          proposals: [
+            { id: 'proposal-1', runId: 'run-1', kind: 'write', path: 'src/a.ts', diff: '+a', status: 'pending' },
+            { id: 'proposal-2', runId: 'run-1', kind: 'write', path: 'src/b.ts', diff: '+b', status: 'pending' }
+          ]
+        }
+      }
+    })
+    render(<AgentPanel desktop={harness.desktop} store={harness.store} />)
+
+    fireEvent.click(screen.getByRole('button', { name: /^aplicar todas$/i }))
+
+    await waitFor(() => expect(harness.applyProposal).toHaveBeenCalledTimes(2))
+    expect(harness.applyProposal.mock.calls.map(([id]) => id)).toEqual(['proposal-1', 'proposal-2'])
   })
 
   test('keeps earlier messages visible after a new answer completes', async () => {
@@ -54,7 +86,7 @@ describe('AgentPanel', () => {
       { id: 'old-agent', role: 'assistant', content: 'Resposta antiga', createdAt: '2026-10-03T11:00:01.000Z' }
     ] })
     render(<AgentPanel desktop={harness.desktop} store={harness.store} />)
-    fireEvent.change(screen.getByRole('textbox'), { target: { value: 'Nova mensagem' } })
+    fireEvent.change(screen.getByRole('textbox', { name: /mensagem para o agente/i }), { target: { value: 'Nova mensagem' } })
     fireEvent.click(screen.getByRole('button', { name: /enviar/i }))
     await waitFor(() => expect(harness.start).toHaveBeenCalled())
     act(() => {
@@ -79,18 +111,18 @@ describe('AgentPanel', () => {
   })
 
   test('scrolls to the latest activity automatically', async () => {
-    const scrollIntoView = vi.fn()
-    Element.prototype.scrollIntoView = scrollIntoView
+    const scrollTo = vi.fn()
+    HTMLElement.prototype.scrollTo = scrollTo
     const harness = createHarness()
     render(<AgentPanel desktop={harness.desktop} store={harness.store} />)
-    scrollIntoView.mockClear()
+    scrollTo.mockClear()
 
     act(() => {
       harness.emit(event({ type: 'assistant.delta', delta: 'Analisando o projeto' }))
       harness.emit(event({ type: 'tool.requested', toolCallId: 'call-1', name: 'search_files', arguments: '{"query":"perfil"}' }))
     })
 
-    await waitFor(() => expect(scrollIntoView).toHaveBeenCalled())
+    await waitFor(() => expect(scrollTo).toHaveBeenCalledWith(expect.objectContaining({ behavior: 'auto' })))
   })
 
   test('renders basic markdown instead of exposing formatting markers', () => {
@@ -130,6 +162,25 @@ describe('AgentPanel', () => {
     expect(screen.getByText('Execução concluída · 1 etapa')).toBeInTheDocument()
     expect(screen.getByText('Lendo arquivo…')).toBeInTheDocument()
   })
+
+  test('attaches an explicit reference to another chat', async () => {
+    const harness = createHarness()
+    harness.store.setState({
+      selectedChatId: 'chat-current', activeSessionId: 'chat-current',
+      chats: [{
+        id: 'chat-other', workspaceId: 'workspace-1', title: 'Decisões de arquitetura', titleSource: 'generated', status: 'active',
+        summary: '', createdAt: '2026-10-03T12:00:00.000Z', updatedAt: '2026-10-03T12:00:00.000Z', revision: 1, deletedAt: null
+      }]
+    })
+    render(<AgentPanel desktop={harness.desktop} store={harness.store} />)
+
+    fireEvent.change(screen.getByRole('textbox', { name: /mensagem para o agente/i }), { target: { value: '@' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Referenciar Decisões de arquitetura' }))
+    fireEvent.change(screen.getByRole('textbox', { name: /mensagem para o agente/i }), { target: { value: 'Continue essa implementação' } })
+    fireEvent.click(screen.getByRole('button', { name: /enviar/i }))
+
+    await waitFor(() => expect(harness.start).toHaveBeenCalledWith(expect.objectContaining({ referencedChatIds: ['chat-other'] })))
+  })
 })
 
 function createHarness() {
@@ -139,22 +190,31 @@ function createHarness() {
   const cancel = vi.fn(async () => undefined)
   const resume = vi.fn(async (runId: string) => ({ runId }))
   const resolveApproval = vi.fn(async () => undefined)
+  const resolveAllApprovals = vi.fn(async () => undefined)
+  const applyProposal = vi.fn(async (proposalId: string) => ({
+    id: proposalId, runId: 'run-1', kind: 'write' as const,
+    path: proposalId === 'proposal-1' ? 'src/a.ts' : proposalId === 'proposal-2' ? 'src/b.ts' : 'src/file.ts',
+    diff: '+change', status: 'applied' as const
+  }))
+  const rejectProposal = vi.fn(async (proposalId: string) => ({
+    id: proposalId, runId: 'run-1', kind: 'write' as const, path: 'src/file.ts', diff: '+change', status: 'rejected' as const
+  }))
   const session: SessionRecord = {
     id: 'session-1', title: 'Project', workspaceRoot: 'C:/project', permissionMode: 'ask', messages: [],
     createdAt: '2026-10-03T12:00:00.000Z', updatedAt: '2026-10-03T12:00:00.000Z'
   }
   const desktop = {
     app: { platform: 'win32', electronVersion: '38' },
-    workspace: { open: async (root: string) => ({ root }), createFolder: async () => undefined, list: async () => [], readText: async () => ({ content: '', hash: '', totalLines: 0 }), saveText: async () => ({ hash: '' }), search: async () => [] },
+    workspace: { open: async (root: string) => ({ root }), createFolder: async () => undefined, list: async () => [], readText: async () => ({ content: '', hash: '', totalLines: 0 }), saveText: async () => ({ hash: '' }), search: async () => [], resolveImport: async () => ({ kind: 'unresolved' }) },
     sessions: { list: async () => [session], create: async () => session, appendMessage: async () => { throw new Error('unused') }, listRuns: async () => [], events: async () => [], onAgentEvent: (next: (event: AgentEvent) => void) => { listener = next; return unsubscribe } },
     settings: { models: async () => ({ fastModel: 'fast', deepModel: 'deep' }) },
     projects: { preview: async () => { throw new Error('unused') }, create: async () => { throw new Error('unused') } },
-    agent: { start, resume, cancel, resolveApproval, listProposals: async () => [], applyProposal: async () => { throw new Error('unused') }, rejectProposal: async () => { throw new Error('unused') } },
+    agent: { start, resume, cancel, resolveApproval, resolveAllApprovals, listProposals: async () => [], applyProposal, rejectProposal },
     terminal: { create: async () => ({ id: 'terminal' }), write: async () => undefined, resize: async () => undefined, dispose: async () => undefined, onData: () => () => undefined, onExit: () => () => undefined }
-  } as DesktopAPI
+  } as unknown as DesktopAPI
   const store = createIdeStore({ desktop: () => desktop })
   store.setState({ workspaceRoot: 'C:/project' })
-  return { desktop, store, start, resume, cancel, resolveApproval, unsubscribe, emit: (item: AgentEvent) => listener(item) }
+  return { desktop, store, start, resume, cancel, resolveApproval, resolveAllApprovals, applyProposal, rejectProposal, unsubscribe, emit: (item: AgentEvent) => listener(item) }
 }
 
 type AgentEventInput = AgentEvent extends infer Event ? Event extends AgentEvent ? Omit<Event, 'runId' | 'timestamp'> : never : never

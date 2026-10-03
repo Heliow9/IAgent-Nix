@@ -121,6 +121,34 @@ describe('WorkspaceService', () => {
     ])
   })
 
+  test('searches inside a nested project without losing matches to global result limits', async () => {
+    await mkdir(join(root, 'apps', 'dashboard'), { recursive: true })
+    await mkdir(join(root, 'apps', 'mobile'), { recursive: true })
+    await writeFile(join(root, 'apps', 'dashboard', 'Login.tsx'), 'login dashboard\n', 'utf8')
+    await writeFile(join(root, 'apps', 'mobile', 'Login.tsx'), 'login mobile\n', 'utf8')
+    const workspace = await WorkspaceService.open(root)
+
+    const matches = await workspace.search('login', { useRipgrep: false, path: 'apps/dashboard', maxResults: 10 })
+
+    expect(matches).toEqual([
+      { path: 'apps/dashboard/Login.tsx', line: 1, column: 1, preview: 'login dashboard' }
+    ])
+  })
+
+  test('resolves relative imports, index modules and common src aliases', async () => {
+    await mkdir(join(root, 'src', 'components'), { recursive: true })
+    await writeFile(join(root, 'src', 'components', 'Button.tsx'), 'export const Button = () => null\n', 'utf8')
+    await mkdir(join(root, 'src', 'feature'), { recursive: true })
+    await writeFile(join(root, 'src', 'feature', 'index.ts'), 'export const feature = true\n', 'utf8')
+    const workspace = await WorkspaceService.open(root)
+
+    await expect(workspace.resolveImport('src/index.ts', './components/Button')).resolves.toEqual({ kind: 'workspace', path: 'src/components/Button.tsx' })
+    await expect(workspace.resolveImport('src/index.ts', './feature')).resolves.toEqual({ kind: 'workspace', path: 'src/feature/index.ts' })
+    await expect(workspace.resolveImport('src/index.ts', '@/components/Button')).resolves.toEqual({ kind: 'workspace', path: 'src/components/Button.tsx' })
+    await expect(workspace.resolveImport('src/index.ts', 'react')).resolves.toEqual({ kind: 'external' })
+    await expect(workspace.resolveImport('src/index.ts', './missing')).resolves.toEqual({ kind: 'unresolved' })
+  })
+
   test('uses structured workspace errors', () => {
     const error = new WorkspaceError('NOT_OPEN', 'No workspace is open')
 

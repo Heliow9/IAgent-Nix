@@ -1,6 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron'
 
-import { agentEventSchema, type DesktopAPI } from '../shared/contracts'
+import { agentEventSchema, type DesktopAPI, type FileProposal } from '../shared/contracts'
 
 const desktop: DesktopAPI = {
   app: {
@@ -13,12 +13,42 @@ const desktop: DesktopAPI = {
     list: (path = '') => ipcRenderer.invoke('workspace:list', { path }),
     readText: (path, range = {}) => ipcRenderer.invoke('workspace:readText', { path, ...range }),
     saveText: (path, content, expectedHash) => ipcRenderer.invoke('workspace:saveText', { path, content, expectedHash }),
-    search: (query, maxResults = 100) => ipcRenderer.invoke('workspace:search', { query, maxResults })
+    search: (query, maxResults = 100) => ipcRenderer.invoke('workspace:search', { query, maxResults }),
+    resolveImport: (fromPath, specifier) => ipcRenderer.invoke('workspace:resolveImport', { fromPath, specifier })
+  },
+  intelligence: {
+    rebuild: () => ipcRenderer.invoke('intelligence:rebuild'),
+    summary: () => ipcRenderer.invoke('intelligence:summary'),
+    searchSymbols: (query, maxResults = 100) => ipcRenderer.invoke('intelligence:searchSymbols', { query, maxResults }),
+    relatedFiles: (path) => ipcRenderer.invoke('intelligence:relatedFiles', { path })
+  },
+  git: {
+    status: () => ipcRenderer.invoke('git:status'),
+    diff: (path, staged = false) => ipcRenderer.invoke('git:diff', { path, staged }),
+    stage: (paths) => ipcRenderer.invoke('git:stage', { paths }),
+    unstage: (paths) => ipcRenderer.invoke('git:unstage', { paths }),
+    commit: (message) => ipcRenderer.invoke('git:commit', { message }),
+    branches: () => ipcRenderer.invoke('git:branches'),
+    checkout: (branch) => ipcRenderer.invoke('git:checkout', { branch })
+  },
+  memory: {
+    list: () => ipcRenderer.invoke('memory:list'),
+    add: (category, text) => ipcRenderer.invoke('memory:add', { category, text }),
+    remove: (id) => ipcRenderer.invoke('memory:remove', { id })
+  },
+  skills: {
+    list: () => ipcRenderer.invoke('skills:list'),
+    reload: () => ipcRenderer.invoke('skills:reload')
+  },
+  mcp: {
+    servers: () => ipcRenderer.invoke('mcp:servers'),
+    configure: (servers) => ipcRenderer.invoke('mcp:configure', servers),
+    tools: (serverId) => ipcRenderer.invoke('mcp:tools', { serverId })
   },
   sessions: {
     list: () => ipcRenderer.invoke('sessions:list'),
     create: (input) => ipcRenderer.invoke('sessions:create', input),
-    appendMessage: (sessionId, role, content) => ipcRenderer.invoke('sessions:appendMessage', { sessionId, role, content }),
+    appendMessage: (sessionId, role, content, referencedChatIds = []) => ipcRenderer.invoke('sessions:appendMessage', { sessionId, role, content, referencedChatIds }),
     listRuns: (sessionId) => ipcRenderer.invoke('sessions:listRuns', { sessionId }),
     events: (runId) => ipcRenderer.invoke('sessions:events', { runId }),
     onAgentEvent: (listener) => {
@@ -39,7 +69,12 @@ const desktop: DesktopAPI = {
     archiveChat: (chatId) => ipcRenderer.invoke('conversations:archiveChat', { chatId })
   },
   settings: {
-    models: () => ipcRenderer.invoke('settings:models')
+    models: () => ipcRenderer.invoke('settings:models'),
+    get: () => ipcRenderer.invoke('settings:get'),
+    update: (patch) => ipcRenderer.invoke('settings:update', patch)
+  },
+  groq: {
+    quota: () => ipcRenderer.invoke('groq:quota')
   },
   projects: {
     preview: (input) => ipcRenderer.invoke('projects:preview', input),
@@ -50,9 +85,10 @@ const desktop: DesktopAPI = {
     resume: (runId) => ipcRenderer.invoke('agent:resume', { runId }),
     cancel: (runId) => ipcRenderer.invoke('agent:cancel', { runId }),
     resolveApproval: (runId, approvalId, decision) => ipcRenderer.invoke('agent:resolveApproval', { runId, approvalId, decision }),
+    resolveAllApprovals: (runId, decision) => ipcRenderer.invoke('agent:resolveAllApprovals', { runId, decision }),
     listProposals: () => ipcRenderer.invoke('agent:listProposals'),
-    applyProposal: (proposalId) => ipcRenderer.invoke('agent:applyProposal', { proposalId }),
-    rejectProposal: (proposalId) => ipcRenderer.invoke('agent:rejectProposal', { proposalId })
+    applyProposal: (proposalId) => unwrapProposalAction<FileProposal>(ipcRenderer.invoke('agent:applyProposal', { proposalId })),
+    rejectProposal: (proposalId) => unwrapProposalAction<FileProposal>(ipcRenderer.invoke('agent:rejectProposal', { proposalId }))
   },
   terminal: {
     create: (input) => ipcRenderer.invoke('terminal:create', input),
@@ -72,6 +108,14 @@ const desktop: DesktopAPI = {
       return () => { ipcRenderer.removeListener('terminal:exit', handler); void ipcRenderer.invoke('terminal:unsubscribe', { id }) }
     }
   }
+}
+
+async function unwrapProposalAction<T>(promise: Promise<unknown>): Promise<T> {
+  const result = await promise as { ok?: boolean; value?: T; error?: { code?: string; message?: string } }
+  if (result?.ok === true) return result.value as T
+  const error = new Error(result?.error?.message ?? 'Nao foi possivel concluir a proposta.')
+  Object.assign(error, { code: result?.error?.code ?? 'PROPOSAL_ACTION_FAILED' })
+  throw error
 }
 
 contextBridge.exposeInMainWorld('desktop', desktop)

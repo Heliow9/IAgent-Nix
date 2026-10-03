@@ -8,7 +8,8 @@ const createSessionSchema = z.object({ title: z.string().min(1), workspaceRoot: 
 const appendMessageSchema = z.object({
   sessionId: z.string().min(1),
   role: z.enum(['user', 'assistant', 'system', 'tool']),
-  content: z.string()
+  content: z.string(),
+  referencedChatIds: z.array(z.string()).default([])
 })
 const sessionIdSchema = z.object({ sessionId: z.string().min(1) })
 const runIdSchema = z.object({ runId: z.string().min(1) })

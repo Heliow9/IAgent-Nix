@@ -1,6 +1,6 @@
 import { z } from 'zod'
 
-export const permissionModeSchema = z.enum(['ask', 'auto-workspace'])
+export const permissionModeSchema = z.enum(['ask', 'auto-workspace', 'autopilot'])
 export type PermissionMode = z.infer<typeof permissionModeSchema>
 
 export const runStatusSchema = z.enum([
@@ -21,6 +21,11 @@ export const workspaceEntrySchema = z.object({
 })
 export type WorkspaceEntry = z.infer<typeof workspaceEntrySchema>
 
+export interface ImportResolution {
+  kind: 'workspace' | 'external' | 'unresolved'
+  path?: string
+}
+
 const eventBase = {
   runId: z.string().min(1),
   timestamp: z.string().datetime()
@@ -30,6 +35,7 @@ export const agentEventSchema = z.discriminatedUnion('type', [
   z.object({ ...eventBase, type: z.literal('run.queued'), queuePosition: z.number().int().positive() }),
   z.object({ ...eventBase, type: z.literal('run.started') }),
   z.object({ ...eventBase, type: z.literal('run.resumed') }),
+  z.object({ ...eventBase, type: z.literal('run.configuration'), model: z.string().min(1), reasoningEffort: z.enum(['low', 'medium', 'high']), contextTokenBudget: z.number().int().positive(), freeTierMode: z.boolean() }),
   z.object({ ...eventBase, type: z.literal('assistant.delta'), delta: z.string() }),
   z.object({ ...eventBase, type: z.literal('assistant.completed'), content: z.string() }),
   z.object({ ...eventBase, type: z.literal('tool.requested'), toolCallId: z.string(), name: z.string(), arguments: z.unknown() }),
@@ -40,6 +46,7 @@ export const agentEventSchema = z.discriminatedUnion('type', [
   z.object({ ...eventBase, type: z.literal('file.proposed'), proposalId: z.string(), path: z.string(), diff: z.string() }),
   z.object({ ...eventBase, type: z.literal('file.applied'), proposalId: z.string(), path: z.string() }),
   z.object({ ...eventBase, type: z.literal('editor.open.requested'), path: z.string().min(1) }),
+  z.object({ ...eventBase, type: z.literal('chat.title.updated'), chatId: z.string().min(1), title: z.string().min(1) }),
   z.object({ ...eventBase, type: z.literal('run.failed'), message: z.string(), resumable: z.boolean().default(false) }),
   z.object({ ...eventBase, type: z.literal('run.cancelled') }),
   z.object({ ...eventBase, type: z.literal('run.completed') })
@@ -116,6 +123,87 @@ export interface ModelSettings {
   deepModel: string
 }
 
+export type ReasoningMode = 'auto' | 'low' | 'medium' | 'high'
+export type QuotaProtectionMode = 'adaptive' | 'monitor' | 'off'
+
+export interface NixSettings extends ModelSettings {
+  contextMaxCharacters: number
+  contextTokenBudget: number
+  maxCompletionTokens: number
+  maxConcurrentRuns: number
+  autoVerify: boolean
+  skillMode: 'auto' | 'off'
+  superpowersEnabled: boolean
+  modelRouting: 'auto' | 'fast' | 'deep'
+  reasoningMode: ReasoningMode
+  groqFreeTierMode: boolean
+  quotaProtection: QuotaProtectionMode
+  groqDailyTokenLimit: number
+}
+
+export interface GroqQuotaSnapshot {
+  plan: 'free' | 'custom'
+  lastUpdatedAt?: string
+  model?: string
+  activeReasoning?: Exclude<ReasoningMode, 'auto'>
+  server: {
+    requestsPerDay: { limit?: number; remaining?: number; reset?: string }
+    tokensPerMinute: { limit?: number; remaining?: number; reset?: string }
+  }
+  local: {
+    date: string
+    requestsToday: number
+    estimatedTokensToday: number
+    configuredDailyTokenLimit: number
+  }
+  policy: {
+    freeTierMode: boolean
+    protection: QuotaProtectionMode
+    contextTokenBudget: number
+    maxCompletionTokens: number
+  }
+}
+
+export interface WorkspaceSymbol {
+  name: string
+  kind: 'function' | 'class' | 'interface' | 'type' | 'const' | 'variable' | 'method' | 'unknown'
+  path: string
+  line: number
+  exported?: boolean
+}
+
+export interface WorkspaceImportEdge { from: string; specifier: string; resolved?: string }
+export interface WorkspaceIndexSummary {
+  files: number
+  symbols: number
+  imports: number
+  indexedAt: string
+  languages: Record<string, number>
+}
+
+export interface GitFileStatus { path: string; index: string; worktree: string }
+export interface GitStatus { branch: string; ahead: number; behind: number; files: GitFileStatus[]; clean: boolean }
+
+export interface ProjectMemoryItem {
+  id: string
+  category: 'architecture' | 'decision' | 'convention' | 'issue' | 'fact'
+  text: string
+  createdAt: string
+  updatedAt: string
+}
+
+export interface SkillInfo {
+  id: string
+  name: string
+  description: string
+  source: 'builtin' | 'workspace' | 'external'
+  enabled: boolean
+}
+
+export interface McpServerConfig { id: string; name: string; command: string; args: string[]; enabled: boolean }
+export interface McpServerStatus extends McpServerConfig { connected: boolean; error?: string; toolCount?: number }
+
+
 export const projectTemplateSchema = z.enum(['empty', 'node-typescript', 'react-typescript'])
 export const projectTemplateInputSchema = z.object({
   name: z.string().min(1),
@@ -178,11 +266,41 @@ export interface DesktopAPI {
     readText(path: string, range?: { startLine?: number; endLine?: number }): Promise<{ content: string; hash: string; totalLines: number }>
     saveText(path: string, content: string, expectedHash?: string): Promise<{ hash: string }>
     search(query: string, maxResults?: number): Promise<Array<{ path: string; line: number; column: number; preview: string }>>
+    resolveImport(fromPath: string, specifier: string): Promise<ImportResolution>
+  }
+  intelligence: {
+    rebuild(): Promise<WorkspaceIndexSummary>
+    summary(): Promise<WorkspaceIndexSummary>
+    searchSymbols(query: string, maxResults?: number): Promise<WorkspaceSymbol[]>
+    relatedFiles(path: string): Promise<Array<{ path: string; relation: 'imports' | 'imported-by' }>>
+  }
+  git: {
+    status(): Promise<GitStatus>
+    diff(path?: string, staged?: boolean): Promise<string>
+    stage(paths: string[]): Promise<void>
+    unstage(paths: string[]): Promise<void>
+    commit(message: string): Promise<string>
+    branches(): Promise<Array<{ name: string; current: boolean }>>
+    checkout(branch: string): Promise<void>
+  }
+  memory: {
+    list(): Promise<ProjectMemoryItem[]>
+    add(category: ProjectMemoryItem['category'], text: string): Promise<ProjectMemoryItem>
+    remove(id: string): Promise<void>
+  }
+  skills: {
+    list(): Promise<SkillInfo[]>
+    reload(): Promise<SkillInfo[]>
+  }
+  mcp: {
+    servers(): Promise<McpServerStatus[]>
+    configure(servers: McpServerConfig[]): Promise<McpServerStatus[]>
+    tools(serverId: string): Promise<Array<{ name: string; description?: string }>>
   }
   sessions: {
     list(): Promise<SessionRecord[]>
     create(input: { title: string; workspaceRoot: string }): Promise<SessionRecord>
-    appendMessage(sessionId: string, role: ChatMessage['role'], content: string): Promise<ChatMessage>
+    appendMessage(sessionId: string, role: ChatMessage['role'], content: string, referencedChatIds?: string[]): Promise<ChatMessage>
     listRuns(sessionId: string): Promise<RunSummary[]>
     events(runId: string): Promise<AgentEvent[]>
     onAgentEvent(listener: (event: AgentEvent) => void): () => void
@@ -197,6 +315,11 @@ export interface DesktopAPI {
   }
   settings: {
     models(): Promise<ModelSettings>
+    get(): Promise<NixSettings>
+    update(patch: Partial<NixSettings>): Promise<NixSettings>
+  }
+  groq?: {
+    quota(): Promise<GroqQuotaSnapshot>
   }
   projects: {
     preview(input: ProjectTemplateInput): Promise<ProjectPreview>
@@ -207,6 +330,7 @@ export interface DesktopAPI {
     resume(runId: string): Promise<{ runId: string }>
     cancel(runId: string): Promise<void>
     resolveApproval(runId: string, approvalId: string, decision: 'approved' | 'rejected'): Promise<void>
+    resolveAllApprovals(runId: string, decision: 'approved' | 'rejected'): Promise<void>
     listProposals(): Promise<FileProposal[]>
     applyProposal(proposalId: string): Promise<FileProposal>
     rejectProposal(proposalId: string): Promise<FileProposal>

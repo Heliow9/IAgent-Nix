@@ -9,7 +9,8 @@ export interface CommandInput {
 
 export async function runCommand(input: CommandInput, signal: AbortSignal): Promise<{ exitCode: number | null; stdout: string; stderr: string }> {
   return new Promise((resolve, reject) => {
-    const child = spawn(input.program, input.args ?? [], { cwd: input.cwd, windowsHide: true, shell: false })
+    const useShell = process.platform === 'win32' && /\.(?:cmd|bat)$/i.test(input.program)
+    const child = spawn(input.program, input.args ?? [], { cwd: input.cwd, windowsHide: true, shell: useShell })
     let stdout = ''
     let stderr = ''
     const limit = 200_000

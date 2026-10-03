@@ -45,11 +45,11 @@ describe('FileTree', () => {
 function fakeDesktop(list: DesktopAPI['workspace']['list']): DesktopAPI {
   return {
     app: { platform: 'win32', electronVersion: '38' },
-    workspace: { open: async (root) => ({ root }), createFolder: async () => undefined, list, readText: async () => ({ content: '', hash: '', totalLines: 0 }), saveText: async () => ({ hash: '' }), search: async () => [] },
+    workspace: { open: async (root: string) => ({ root }), createFolder: async () => undefined, list, readText: async () => ({ content: '', hash: '', totalLines: 0 }), saveText: async () => ({ hash: '' }), search: async () => [], resolveImport: async () => ({ kind: 'unresolved' }) },
     sessions: { list: async () => [], create: async () => { throw new Error('unused') }, appendMessage: async () => { throw new Error('unused') }, listRuns: async () => [], events: async () => [], onAgentEvent: () => () => undefined },
     settings: { models: async () => ({ fastModel: 'fast', deepModel: 'deep' }) },
     projects: { preview: async () => { throw new Error('unused') }, create: async () => { throw new Error('unused') } },
-    agent: { start: async () => ({ runId: 'run' }), resume: async (runId) => ({ runId }), cancel: async () => undefined, resolveApproval: async () => undefined, listProposals: async () => [], applyProposal: async () => { throw new Error('unused') }, rejectProposal: async () => { throw new Error('unused') } },
+    agent: { start: async () => ({ runId: 'run' }), resume: async (runId: string) => ({ runId }), cancel: async () => undefined, resolveApproval: async () => undefined, resolveAllApprovals: async () => undefined, listProposals: async () => [], applyProposal: async () => { throw new Error('unused') }, rejectProposal: async () => { throw new Error('unused') } },
     terminal: { create: async () => ({ id: 'terminal' }), write: async () => undefined, resize: async () => undefined, dispose: async () => undefined, onData: () => () => undefined, onExit: () => () => undefined }
-  }
+  } as unknown as DesktopAPI
 }

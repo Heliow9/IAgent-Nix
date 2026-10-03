@@ -23,7 +23,7 @@ export interface ProposalPersistence {
 }
 
 export class ChangeConflictError extends Error {
-  constructor(message = 'File changed after the proposal was created') {
+  constructor(message = 'O arquivo mudou depois que a proposta foi criada. O NIX preservou a versao atual e nao sobrescreveu o arquivo.') {
     super(message)
     this.name = 'ChangeConflictError'
   }
@@ -52,6 +52,28 @@ export class ChangeService {
   async propose(input: { kind: ChangeKind; path: string; content?: string; runId?: string }): Promise<ChangeProposal> {
     const workspace = this.getWorkspace()
     const current = await readIfPresent(workspace, input.path)
+    const pending = input.runId ? this.pendingProposalFor(input.path, input.runId) : undefined
+
+    // A single agent run may refine the same file several times before the user
+    // presses Apply. Keep one cumulative proposal for that run/path instead of
+    // creating a stack of proposals that all point at the same stale base hash.
+    if (pending) {
+      assertProposalBaseIsCurrent(pending, current)
+      const effectiveBefore = pending.kind === 'write' ? pending.content ?? '' : current?.content
+      if (input.kind === 'delete' && !current) throw new Error('Cannot delete a missing file')
+      if (input.kind === 'write') validateGeneratedContent(effectiveBefore, input.content ?? '')
+
+      pending.kind = input.kind
+      pending.content = input.kind === 'write' ? input.content : undefined
+      pending.diff = createDiff(input.path, current?.content ?? '', input.kind === 'delete' ? '' : input.content ?? '')
+      await this.persistence?.upsertProposal(pending)
+      if (pending.runId) this.eventBus?.publish({
+        type: 'file.proposed', runId: pending.runId, timestamp: new Date().toISOString(),
+        proposalId: pending.id, path: pending.path, diff: pending.diff
+      })
+      return structuredClone(pending)
+    }
+
     if (input.kind === 'delete' && !current) throw new Error('Cannot delete a missing file')
     if (input.kind === 'write') validateGeneratedContent(current?.content, input.content ?? '')
     const proposal: ChangeProposal = {
@@ -70,7 +92,10 @@ export class ChangeService {
   }
 
   async proposePatch(input: { path: string; edits: Array<{ search: string; replace: string }>; runId?: string }): Promise<ChangeProposal> {
-    const current = await this.getWorkspace().readText(input.path)
+    const pending = input.runId ? this.pendingProposalFor(input.path, input.runId) : undefined
+    const current = pending?.kind === 'write'
+      ? { content: pending.content ?? '' }
+      : await this.getWorkspace().readText(input.path)
     let content = current.content
     for (const edit of input.edits) {
       const first = content.indexOf(edit.search)
@@ -99,7 +124,7 @@ export class ChangeService {
         await workspace.writeTextAtomic(proposal.path, proposal.content ?? '', proposal.baseHash)
       } else {
         const existing = await readIfPresent(workspace, proposal.path)
-        if (existing) throw new ChangeConflictError('A file now exists at the proposed path')
+        if (existing) throw new ChangeConflictError('Um arquivo foi criado nesse caminho depois da proposta. O NIX nao sobrescreveu o arquivo novo.')
         await workspace.writeTextAtomic(proposal.path, proposal.content ?? '')
       }
     } catch (error) {
@@ -130,6 +155,23 @@ export class ChangeService {
     if (proposal.status !== 'pending') throw new Error('Proposal is not pending')
     return proposal
   }
+
+  private pendingProposalFor(path: string, runId: string): ChangeProposal | undefined {
+    return [...this.proposals.values()].reverse().find((proposal) => (
+      proposal.status === 'pending' && proposal.path === path && proposal.runId === runId
+    ))
+  }
+}
+
+function assertProposalBaseIsCurrent(
+  proposal: ChangeProposal,
+  current: { content: string; hash: string } | undefined
+): void {
+  if (proposal.baseHash) {
+    if (!current || current.hash !== proposal.baseHash) throw new ChangeConflictError()
+    return
+  }
+  if (current) throw new ChangeConflictError('Um arquivo foi criado nesse caminho depois da proposta. O NIX nao sobrescreveu o arquivo novo.')
 }
 
 async function readIfPresent(workspace: WorkspaceService, path: string): Promise<{ content: string; hash: string } | undefined> {

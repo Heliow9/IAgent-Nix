@@ -1,6 +1,7 @@
 {
   "name": "groq-desktop-ide",
-  "version": "0.1.0",
+  "productName": "NIX",
+  "version": "0.2.13",
   "private": true,
   "type": "module",
   "description": "A local-first agentic IDE powered by Groq.",

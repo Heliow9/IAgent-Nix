@@ -8,13 +8,17 @@ export interface ToolActivityItem {
   result?: unknown
 }
 
-export function ToolActivity({ items, status, fileCount = 0 }: {
+export function ToolActivity({ items, status, fileCount = 0, queuePosition, configuration }: {
   items: ToolActivityItem[]
   status: RunStatus
   fileCount?: number
+  queuePosition?: number
+  configuration?: { model: string; reasoningEffort: 'low' | 'medium' | 'high'; contextTokenBudget: number; freeTierMode: boolean }
 }): React.JSX.Element | null {
   const active = [...items].reverse().find((item) => item.status !== 'completed')
-  const summary = items.length === 0 && (status === 'running' || status === 'queued')
+  const summary = status === 'queued' && queuePosition
+    ? `Na fila · posição ${queuePosition}`
+    : items.length === 0 && (status === 'running' || status === 'queued')
     ? 'Analisando solicitação…'
     : active ? currentAction(active) : completedSummary(status, items.length, fileCount)
   return (
@@ -22,9 +26,11 @@ export function ToolActivity({ items, status, fileCount = 0 }: {
       <summary role="status" aria-live="polite">
         <span className={`execution-state ${status}`} aria-hidden>{statusIcon(status)}</span>
         <span>{summary}</span>
-        <small>Detalhes</small>
+        <small>{configuration ? `${shortModel(configuration.model)} · ${configuration.reasoningEffort.toUpperCase()}` : 'Detalhes'}</small>
       </summary>
       <div className="execution-details">
+        {configuration && <p className="execution-config">Modelo: {configuration.model} · Reasoning: {configuration.reasoningEffort.toUpperCase()} · Contexto: {configuration.contextTokenBudget.toLocaleString('pt-BR')} tokens{configuration.freeTierMode ? ' · Free Tier' : ''}</p>}
+        {items.length === 0 && status === 'completed' && <p className="execution-empty">O NIX respondeu diretamente, sem executar ferramentas.</p>}
         {items.map((item) => <article className="tool-row" key={item.id}>
           <span className={`tool-status ${toolFailed(item) ? 'failed' : item.status}`} aria-hidden>{toolFailed(item) ? '!' : item.status === 'completed' ? '✓' : item.status === 'running' ? '●' : '○'}</span>
           <div><strong>{completedAction(item.name)}</strong>{contextLabel(item.arguments) && <small>{contextLabel(item.arguments)}</small>}</div>
@@ -106,4 +112,10 @@ function formatPayload(value: unknown): string {
 
 function toolFailed(item: ToolActivityItem): boolean {
   return Boolean(item.result && typeof item.result === 'object' && 'ok' in item.result && item.result.ok === false)
+}
+
+function shortModel(model: string): string {
+  if (model === 'openai/gpt-oss-120b') return '120B'
+  if (model === 'openai/gpt-oss-20b') return '20B'
+  return model.split('/').at(-1) ?? model
 }

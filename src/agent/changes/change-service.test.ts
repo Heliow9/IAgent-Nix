@@ -81,6 +81,35 @@ describe('ChangeService', () => {
     expect(proposal.diff).toContain('+export const value = 2')
   })
 
+  test('consolidates repeated edits from the same run into one cumulative proposal', async () => {
+    const service = new ChangeService(() => workspace)
+    const first = await service.proposePatch({
+      path: 'src/app.ts', runId: 'run-1',
+      edits: [{ search: 'value = 1', replace: 'value = 2' }]
+    })
+    const second = await service.proposePatch({
+      path: 'src/app.ts', runId: 'run-1',
+      edits: [{ search: 'value = 2', replace: 'value = 3' }]
+    })
+
+    expect(second.id).toBe(first.id)
+    expect(service.list()).toHaveLength(1)
+    expect(second.content).toBe('export const value = 3\n')
+
+    await service.apply(second.id)
+    expect(await readFile(join(root, 'src', 'app.ts'), 'utf8')).toBe('export const value = 3\n')
+  })
+
+  test('keeps proposals from concurrent runs independent', async () => {
+    const service = new ChangeService(() => workspace)
+    const first = await service.propose({ kind: 'write', path: 'src/app.ts', content: 'run one\n', runId: 'run-1' })
+    const second = await service.propose({ kind: 'write', path: 'src/app.ts', content: 'run two\n', runId: 'run-2' })
+
+    expect(second.id).not.toBe(first.id)
+    await service.apply(first.id)
+    await expect(service.apply(second.id)).rejects.toBeInstanceOf(ChangeConflictError)
+  })
+
   test('rejects ambiguous localized edits and patch protocol markers in file content', async () => {
     const service = new ChangeService(() => workspace)
     await expect(service.proposePatch({ path: 'src/app.ts', edits: [{ search: 'missing text', replace: 'new' }] }))

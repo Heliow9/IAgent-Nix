@@ -16,12 +16,8 @@ export function registerWorkspaceTools(
     query: z.string().min(1),
     path: z.string().optional(),
     maxResults: z.number().int().positive().max(500).default(100)
-  }), 'read'), async ({ query, path, maxResults }) => {
-    const matches = await getWorkspace().search(query, { maxResults: path ? 500 : maxResults })
-    if (!path || path === '.') return matches.slice(0, maxResults)
-    const prefix = path.replaceAll('\\', '/').replace(/^\.\//, '').replace(/\/$/, '')
-    return matches.filter((match) => match.path === prefix || match.path.startsWith(`${prefix}/`)).slice(0, maxResults)
-  })
+  }), 'read'), ({ query, path, maxResults }) =>
+    getWorkspace().search(query, { path, maxResults }))
   registry.register(definition('read_file', 'Read a text file', z.object({ path: z.string().min(1), startLine: z.number().int().positive().optional(), endLine: z.number().int().positive().optional() }), 'read'),
     ({ path, startLine, endLine }) => getWorkspace().readText(path, { startLine, endLine }))
   registry.register(definition('open_file_in_editor', 'Open an existing workspace file in the visual code editor. Use this when the user asks to open, show, or navigate to a file in the editor. Do not use read_file as a substitute and do not paste the file content into chat.', z.object({ path: z.string().min(1) }), 'read'),

@@ -3,15 +3,17 @@ import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 
 import type { AgentEvent, ChatMessage, ChatRecord, FileProposal, PermissionMode, RunRecord, RunStatus, RunSummary, SessionRecord, WorkspaceRecord } from '../../shared/contracts'
-import type { ModelMessage } from '../../agent/providers/model-provider'
+import type { ModelMessage, ReasoningEffort } from '../../agent/providers/model-provider'
 
 export interface RunCheckpoint {
   sessionId: string
   prompt: string
   permissionMode: PermissionMode
   model: string
+  reasoningEffort?: ReasoningEffort
   messages: ModelMessage[]
   safeToResume: boolean
+  referencedChatIds?: string[]
 }
 
 interface StoredSession extends SessionRecord {
@@ -120,6 +122,11 @@ export class SessionStore {
       .map(chatFromSession)
   }
 
+  getChat(chatId: string): ChatRecord | undefined {
+    const session = this.state.sessions.find((item) => item.id === chatId && !item.deletedAt)
+    return session ? chatFromSession(session) : undefined
+  }
+
   async renameChat(chatId: string, title: string, source: ChatRecord['titleSource'] = 'manual'): Promise<ChatRecord> {
     const session = this.requireSession(chatId) as StoredSession
     if (source === 'generated' && session.titleSource === 'manual') return chatFromSession(session)
@@ -149,11 +156,11 @@ export class SessionStore {
     return session ? structuredClone(session) : undefined
   }
 
-  async appendMessage(sessionId: string, input: Pick<ChatMessage, 'role' | 'content'>): Promise<ChatMessage> {
+  async appendMessage(sessionId: string, input: Pick<ChatMessage, 'role' | 'content'> & Partial<Pick<ChatMessage, 'attachments' | 'referencedChatIds'>>): Promise<ChatMessage> {
     const session = this.requireSession(sessionId)
     const message: ChatMessage = {
       id: randomUUID(), chatId: sessionId, role: input.role, content: input.content,
-      attachments: [], referencedChatIds: [], createdAt: new Date().toISOString(), revision: 1, deletedAt: null
+      attachments: input.attachments ?? [], referencedChatIds: input.referencedChatIds ?? [], createdAt: new Date().toISOString(), revision: 1, deletedAt: null
     }
     session.messages.push(message)
     session.updatedAt = message.createdAt
@@ -161,7 +168,7 @@ export class SessionStore {
     return structuredClone(message)
   }
 
-  async createRun(input: Pick<RunRecord, 'id' | 'sessionId' | 'status'>): Promise<RunRecord> {
+  async createRun(input: Omit<RunRecord, 'createdAt' | 'updatedAt'>): Promise<RunRecord> {
     this.requireSession(input.sessionId)
     const now = new Date().toISOString()
     const run: RunRecord = { ...input, createdAt: now, updatedAt: now }
@@ -181,6 +188,16 @@ export class SessionStore {
       .filter((run) => run.sessionId === sessionId)
       .map((run) => ({ ...structuredClone(run), resumable: Boolean(this.state.checkpoints[run.id]?.safeToResume) }))
       .sort((left, right) => left.createdAt.localeCompare(right.createdAt))
+  }
+
+  listQueuedRuns(): RunRecord[] {
+    return structuredClone(this.state.runs)
+      .filter((run) => run.status === 'queued')
+      .sort((left, right) => (left.queueSequence ?? Number.MAX_SAFE_INTEGER) - (right.queueSequence ?? Number.MAX_SAFE_INTEGER))
+  }
+
+  nextQueueSequence(): number {
+    return Math.max(0, ...this.state.runs.map((run) => run.queueSequence ?? 0)) + 1
   }
 
   async saveCheckpoint(runId: string, checkpoint: RunCheckpoint): Promise<void> {

@@ -57,4 +57,18 @@ describe('ToolActivity', () => {
     fireEvent.click(screen.getByText('Processando resposta · 1 etapa'))
     expect(screen.getByText('falhou')).toBeInTheDocument()
   })
+
+  test('explains completed executions that did not call tools', () => {
+    render(<ToolActivity status="completed" items={[]} />)
+
+    fireEvent.click(screen.getByText('Execução concluída · 0 etapas'))
+
+    expect(screen.getByText('O NIX respondeu diretamente, sem executar ferramentas.')).toBeInTheDocument()
+  })
+
+  test('shows the persistent queue position', () => {
+    render(<ToolActivity status="queued" queuePosition={3} items={[]} />)
+
+    expect(screen.getByText('Na fila · posição 3')).toBeInTheDocument()
+  })
 })

@@ -176,6 +176,31 @@ describe('RunEventBus', () => {
       'run.completed'
     ])
   })
+
+  test('delivers transient streaming events without retaining them in memory', () => {
+    const bus = new RunEventBus()
+    const delivered: string[] = []
+    bus.subscribe((item) => delivered.push(item.type))
+
+    bus.publishTransient(event({ type: 'assistant.delta', delta: 'token' }))
+
+    expect(delivered).toEqual(['assistant.delta'])
+    expect(bus.history('run-1')).toEqual([])
+  })
+
+  test('bounds retained diagnostic history across long-running app sessions', () => {
+    const bus = new RunEventBus()
+    for (let index = 0; index < 250; index += 1) {
+      bus.publish(event({ type: 'tool.started', toolCallId: `tool-${index}`, name: 'read_file' }))
+    }
+    for (let index = 0; index < 60; index += 1) {
+      bus.publish({ ...event({ type: 'run.started' }), runId: `other-run-${index}` })
+    }
+
+    expect(bus.history('run-1')).toHaveLength(200)
+    expect(bus.history('other-run-0')).toEqual([])
+    expect(bus.history('other-run-59')).toHaveLength(1)
+  })
 })
 
 type AgentEventInput = AgentEvent extends infer Event
