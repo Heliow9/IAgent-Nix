@@ -1,7 +1,8 @@
 import { useStore } from 'zustand'
 import { createStore, type StoreApi } from 'zustand/vanilla'
 
-import type { DesktopAPI, WorkspaceEntry } from '../../../shared/contracts'
+import type { AgentEvent, DesktopAPI, FileProposal, PermissionMode, RunStatus, WorkspaceEntry } from '../../../shared/contracts'
+import type { ToolActivityItem } from '../components/agent/ToolActivity'
 import { languageForPath } from '../lib/languages'
 
 export type ActivityId = 'files' | 'search' | 'source-control' | 'agent' | 'settings'
@@ -30,6 +31,9 @@ export interface IdeState {
   loadingFiles: string[]
   activePath?: string
   activeSessionId?: string
+  activeRunId?: string
+  permissionMode: PermissionMode
+  agentRuns: Record<string, AgentRunView>
   openWorkspace(root: string): Promise<void>
   loadDirectory(path: string): Promise<void>
   selectFile(path: string): void
@@ -37,8 +41,25 @@ export interface IdeState {
   updateBuffer(path: string, content: string): void
   saveFile(path: string): Promise<void>
   closeFile(path: string, decision: 'save' | 'discard' | 'cancel'): Promise<void>
+  sendAgentMessage(prompt: string): Promise<void>
+  cancelAgentRun(): Promise<void>
+  reduceAgentEvent(event: AgentEvent): void
+  resolveAgentApproval(runId: string, approvalId: string, decision: 'approved' | 'rejected'): Promise<void>
+  applyProposal(proposalId: string): Promise<void>
+  rejectProposal(proposalId: string): Promise<void>
+  setPermissionMode(mode: PermissionMode): void
   selectActivity(activity: ActivityId): void
   setPanelSize(panel: PanelId, size: number): void
+}
+
+export interface AgentRunView {
+  id: string
+  status: RunStatus
+  assistantText: string
+  tools: ToolActivityItem[]
+  approvals: Array<{ id: string; summary: string; status: 'pending' | 'approved' | 'rejected' }>
+  proposals: FileProposal[]
+  error?: string
 }
 
 export interface EditorBuffer {
@@ -81,6 +102,8 @@ export function createIdeStore(options: StoreOptions = {}): IdeStore {
     openTabs: [],
     buffers: {},
     loadingFiles: [],
+    permissionMode: 'ask',
+    agentRuns: {},
     async openWorkspace(root) {
       set({ loadingWorkspace: true, workspaceError: undefined })
       try {
@@ -93,7 +116,10 @@ export function createIdeStore(options: StoreOptions = {}): IdeStore {
           openTabs: [],
           buffers: {},
           loadingFiles: [],
-          activePath: undefined
+          activePath: undefined,
+          activeSessionId: undefined,
+          activeRunId: undefined,
+          agentRuns: {}
         })
       } catch (error) {
         set({ loadingWorkspace: false, workspaceError: normalizeError(error) })
@@ -167,6 +193,58 @@ export function createIdeStore(options: StoreOptions = {}): IdeStore {
         return { openTabs, buffers, activePath: state.activePath === path ? openTabs.at(-1) : state.activePath }
       })
     },
+    async sendAgentMessage(prompt) {
+      const workspaceRoot = get().workspaceRoot
+      if (!workspaceRoot) throw new Error('Open a workspace before starting the agent')
+      let sessionId = get().activeSessionId
+      if (!sessionId) {
+        const sessions = await desktop().sessions.list()
+        const existing = sessions.find((session) => session.workspaceRoot === workspaceRoot)
+        sessionId = existing?.id ?? (await desktop().sessions.create({ title: workspaceRoot.split(/[\\/]/).at(-1) ?? 'Workspace', workspaceRoot })).id
+        set({ activeSessionId: sessionId })
+      }
+      const result = await desktop().agent.start({
+        sessionId, prompt, permissionMode: get().permissionMode,
+        attachedFiles: get().activePath ? [get().activePath!] : []
+      })
+      set((state) => ({ activeRunId: result.runId, agentRuns: { ...state.agentRuns, [result.runId]: emptyAgentRun(result.runId) } }))
+    },
+    async cancelAgentRun() {
+      const runId = get().activeRunId
+      if (runId) await desktop().agent.cancel(runId)
+    },
+    reduceAgentEvent(event) {
+      set((state) => {
+        const current = state.agentRuns[event.runId] ?? emptyAgentRun(event.runId)
+        const run: AgentRunView = { ...current, tools: [...current.tools], approvals: [...current.approvals], proposals: [...current.proposals] }
+        if (event.type === 'run.started') run.status = 'running'
+        else if (event.type === 'assistant.delta') run.assistantText += event.delta
+        else if (event.type === 'assistant.completed') run.assistantText = event.content
+        else if (event.type === 'tool.requested') run.tools.push({ id: event.toolCallId, name: event.name, status: 'requested' })
+        else if (event.type === 'tool.started') run.tools = updateTool(run.tools, event.toolCallId, { status: 'running' })
+        else if (event.type === 'tool.completed') run.tools = updateTool(run.tools, event.toolCallId, { status: 'completed', result: event.result })
+        else if (event.type === 'approval.requested') { run.status = 'waiting_approval'; run.approvals.push({ id: event.approvalId, summary: event.summary, status: 'pending' }) }
+        else if (event.type === 'approval.resolved') { run.status = 'running'; run.approvals = run.approvals.map((item) => item.id === event.approvalId ? { ...item, status: event.decision } : item) }
+        else if (event.type === 'file.proposed') run.proposals.push({ id: event.proposalId, runId: event.runId, kind: 'write', path: event.path, diff: event.diff, status: 'pending' })
+        else if (event.type === 'file.applied') run.proposals = run.proposals.map((item) => item.id === event.proposalId ? { ...item, status: 'applied' } : item)
+        else if (event.type === 'run.completed') run.status = 'completed'
+        else if (event.type === 'run.cancelled') run.status = 'cancelled'
+        else if (event.type === 'run.failed') { run.status = 'failed'; run.error = event.message }
+        return { activeRunId: state.activeRunId ?? event.runId, agentRuns: { ...state.agentRuns, [event.runId]: run } }
+      })
+    },
+    async resolveAgentApproval(runId, approvalId, decision) {
+      await desktop().agent.resolveApproval(runId, approvalId, decision)
+    },
+    async applyProposal(proposalId) {
+      const updated = await desktop().agent.applyProposal(proposalId)
+      set((state) => ({ agentRuns: mapProposal(state.agentRuns, proposalId, updated) }))
+    },
+    async rejectProposal(proposalId) {
+      const updated = await desktop().agent.rejectProposal(proposalId)
+      set((state) => ({ agentRuns: mapProposal(state.agentRuns, proposalId, updated) }))
+    },
+    setPermissionMode(permissionMode) { set({ permissionMode }) },
     selectActivity(selectedActivity) {
       set({ selectedActivity })
       saveLayout({ selectedActivity, panelSizes: get().panelSizes })
@@ -177,6 +255,21 @@ export function createIdeStore(options: StoreOptions = {}): IdeStore {
       saveLayout({ selectedActivity: get().selectedActivity, panelSizes })
     }
   }))
+}
+
+function emptyAgentRun(id: string): AgentRunView {
+  return { id, status: 'queued', assistantText: '', tools: [], approvals: [], proposals: [] }
+}
+
+function updateTool(items: ToolActivityItem[], id: string, update: Partial<ToolActivityItem>): ToolActivityItem[] {
+  return items.map((item) => item.id === id ? { ...item, ...update } : item)
+}
+
+function mapProposal(runs: Record<string, AgentRunView>, proposalId: string, proposal: FileProposal): Record<string, AgentRunView> {
+  return Object.fromEntries(Object.entries(runs).map(([id, run]) => [id, {
+    ...run,
+    proposals: run.proposals.map((item) => item.id === proposalId ? proposal : item)
+  }]))
 }
 
 const browserStorage = typeof window !== 'undefined' ? window.localStorage : undefined

@@ -8,6 +8,7 @@ import { ActivityBar } from './ActivityBar'
 import { ResizablePanel } from './ResizablePanel'
 import { EditorArea } from '../editor/EditorArea'
 import { TerminalPanel } from '../terminal/TerminalPanel'
+import { AgentPanel } from '../agent/AgentPanel'
 
 export function IdeShell(): React.JSX.Element {
   const workspaceRoot = useIdeStore((state) => state.workspaceRoot)
@@ -33,7 +34,7 @@ export function IdeShell(): React.JSX.Element {
         <EditorArea />
         <ResizablePanel axis="y" size={sizes.bottom} onSize={(size) => setSize('bottom', size)} className="bottom-panel"><header className="panel-header">TERMINAL</header><TerminalPanel workspaceRoot={workspaceRoot} /></ResizablePanel>
       </section>
-      <ResizablePanel size={sizes.agent} onSize={(size) => setSize('agent', size)} className="agent-panel"><header className="panel-header"><span>AGENTE</span><small>GROQ</small></header><div className="agent-empty"><span className="agent-spark">✦</span><h3>O que vamos construir?</h3><p>O chat e as aprovacoes entram nas proximas etapas.</p></div></ResizablePanel>
+      <ResizablePanel size={sizes.agent} onSize={(size) => setSize('agent', size)} className="agent-panel"><header className="panel-header"><span>AGENTE</span><small>GROQ</small></header><AgentPanel /></ResizablePanel>
     </div>
   )
 }

@@ -4,6 +4,7 @@ import { useStore } from 'zustand'
 
 import { ideStore, type IdeStore } from '../../store/ide-store'
 import { EditorTabs } from './EditorTabs'
+import { MermaidPreview } from '../preview/MermaidPreview'
 
 export function EditorArea({ store = ideStore }: { store?: IdeStore }): React.JSX.Element {
   const activePath = useStore(store, (state) => state.activePath)
@@ -32,16 +33,20 @@ export function EditorArea({ store = ideStore }: { store?: IdeStore }): React.JS
       {activePath && buffer && !buffer.error && (
         <>
           {buffer.saveError && <div className="save-conflict"><span>{buffer.saveError.message}</span><button type="button" onClick={() => void store.getState().openFile(activePath, true)}>Recarregar do disco</button></div>}
-          <Editor
-            path={activePath}
-            language={buffer.language}
-            value={buffer.content}
-            theme="vs-dark"
-            onChange={(value) => updateBuffer(activePath, value ?? '')}
-            options={{ minimap: { enabled: true }, fontSize: 13, fontFamily: 'Cascadia Code, Consolas, monospace', automaticLayout: true, padding: { top: 14 } }}
-          />
+          <div className={`editor-content ${mermaidCode(activePath, buffer.content) ? 'with-preview' : ''}`}>
+            <Editor path={activePath} language={buffer.language} value={buffer.content} theme="vs-dark"
+              onChange={(value) => updateBuffer(activePath, value ?? '')}
+              options={{ minimap: { enabled: true }, fontSize: 13, fontFamily: 'Cascadia Code, Consolas, monospace', automaticLayout: true, padding: { top: 14 } }} />
+            {mermaidCode(activePath, buffer.content) && <MermaidPreview code={mermaidCode(activePath, buffer.content)!} />}
+          </div>
         </>
       )}
     </section>
   )
+}
+
+function mermaidCode(path: string, content: string): string | undefined {
+  if (path.toLowerCase().endsWith('.mmd')) return content
+  if (path.toLowerCase().endsWith('.md')) return content.match(/```mermaid\s*([\s\S]*?)```/i)?.[1]?.trim()
+  return undefined
 }
