@@ -38,6 +38,24 @@ const desktop: DesktopAPI = {
     listProposals: () => ipcRenderer.invoke('agent:listProposals'),
     applyProposal: (proposalId) => ipcRenderer.invoke('agent:applyProposal', { proposalId }),
     rejectProposal: (proposalId) => ipcRenderer.invoke('agent:rejectProposal', { proposalId })
+  },
+  terminal: {
+    create: (input) => ipcRenderer.invoke('terminal:create', input),
+    write: (id, data) => ipcRenderer.invoke('terminal:write', { id, data }),
+    resize: (id, cols, rows) => ipcRenderer.invoke('terminal:resize', { id, cols, rows }),
+    dispose: (id) => ipcRenderer.invoke('terminal:dispose', { id }),
+    onData: (id, listener) => {
+      const handler = (_event: Electron.IpcRendererEvent, payload: { id: string; data: string }): void => { if (payload.id === id) listener(payload.data) }
+      ipcRenderer.on('terminal:data', handler)
+      void ipcRenderer.invoke('terminal:subscribe', { id })
+      return () => { ipcRenderer.removeListener('terminal:data', handler); void ipcRenderer.invoke('terminal:unsubscribe', { id }) }
+    },
+    onExit: (id, listener) => {
+      const handler = (_event: Electron.IpcRendererEvent, payload: { id: string; exitCode: number }): void => { if (payload.id === id) listener(payload.exitCode) }
+      ipcRenderer.on('terminal:exit', handler)
+      void ipcRenderer.invoke('terminal:subscribe', { id })
+      return () => { ipcRenderer.removeListener('terminal:exit', handler); void ipcRenderer.invoke('terminal:unsubscribe', { id }) }
+    }
   }
 }
 

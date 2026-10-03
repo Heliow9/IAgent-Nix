@@ -93,6 +93,7 @@ function desktop(workspace: Partial<DesktopAPI['workspace']> = {}): DesktopAPI {
     },
     sessions: { list: async () => [], create: async () => { throw new Error('unused') }, appendMessage: async () => { throw new Error('unused') }, onAgentEvent: () => () => undefined },
     settings: { models: async () => ({ fastModel: 'fast', deepModel: 'deep' }) },
-    agent: { start: async () => ({ runId: 'run' }), cancel: async () => undefined, resolveApproval: async () => undefined, listProposals: async () => [], applyProposal: async () => { throw new Error('unused') }, rejectProposal: async () => { throw new Error('unused') } }
+    agent: { start: async () => ({ runId: 'run' }), cancel: async () => undefined, resolveApproval: async () => undefined, listProposals: async () => [], applyProposal: async () => { throw new Error('unused') }, rejectProposal: async () => { throw new Error('unused') } },
+    terminal: { create: async () => ({ id: 'terminal' }), write: async () => undefined, resize: async () => undefined, dispose: async () => undefined, onData: () => () => undefined, onExit: () => () => undefined }
   }
 }

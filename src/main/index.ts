@@ -14,6 +14,8 @@ import { registerWorkspaceIpc, type WorkspaceAccess } from './ipc/workspace-ipc'
 import { RunEventBus } from './state/run-events'
 import { SessionStore } from './state/session-store'
 import { WorkspaceError } from './workspace/workspace-service'
+import { TerminalService } from './terminal/terminal-service'
+import { registerTerminalIpc } from './ipc/terminal-ipc'
 
 function createWindow(): BrowserWindow {
   const window = new BrowserWindow({
@@ -70,6 +72,7 @@ app.whenReady().then(async () => {
   registerSettingsIpc()
   registerWorkspaceIpc(workspaceAccess)
   registerAgentIpc(runner, changes)
+  registerTerminalIpc(new TerminalService({ getWorkspaceRoot: () => requireWorkspace().root }))
   createWindow()
 
   app.on('activate', () => {

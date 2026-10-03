@@ -136,4 +136,12 @@ export interface DesktopAPI {
     applyProposal(proposalId: string): Promise<FileProposal>
     rejectProposal(proposalId: string): Promise<FileProposal>
   }
+  terminal: {
+    create(input: { cwd: string; cols: number; rows: number }): Promise<{ id: string }>
+    write(id: string, data: string): Promise<void>
+    resize(id: string, cols: number, rows: number): Promise<void>
+    dispose(id: string): Promise<void>
+    onData(id: string, listener: (data: string) => void): () => void
+    onExit(id: string, listener: (exitCode: number) => void): () => void
+  }
 }
